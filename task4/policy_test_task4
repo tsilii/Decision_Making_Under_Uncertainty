@@ -107,7 +107,9 @@ def solve_adp_step(t, T_r1, T_r2, H, price, occ1, occ2, vent_counter, low_r1, lo
     # --- Objective: immediate cost - VFA approximation of future cost --------
     # min  c_t(a) - eta[t]' * phi(s_{t+1})
     w = eta[t]
-    def obj_rule(m): return price * (m.p1 + m.p2 + P_vent * m.v) - w[0] - w[1]*next_T1(m) - w[2]*next_T2(m) - w[3]*next_H(m) - w[4]*price - w[5]*occ1 - w[6]*occ2
+    def obj_rule(m): return (price * (m.p1 + m.p2 + P_vent * m.v)
+        - w[0] - w[1]*next_T1(m) - w[2]*next_T2(m) - w[3]*next_H(m)
+        - w[4]*price - w[5]*occ1 - w[6]*occ2)
 
     model.obj = Objective(rule=obj_rule, sense=minimize)
 

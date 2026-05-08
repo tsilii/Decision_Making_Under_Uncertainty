@@ -38,9 +38,9 @@ T_TOTAL = int(params['num_timeslots'])  # timeslots per day
 # =============================================================================
 # 2. Load training data
 # =============================================================================
-price_data = pd.read_csv(f'{ROOT}/OutOfSamplePriceData2.0.csv')
-occ_room1  = pd.read_csv(f'{ROOT}/OutOfSampleOccupancyRoom1.2.csv')
-occ_room2  = pd.read_csv(f'{ROOT}/OutOfSampleOccupancyRoom2.2.csv')
+price_data = pd.read_csv(f'{ROOT}/OutOfSamplePriceData.csv')
+occ_room1  = pd.read_csv(f'{ROOT}/OutOfSampleOccupancyRoom1.csv')
+occ_room2  = pd.read_csv(f'{ROOT}/OutOfSampleOccupancyRoom2.csv')
 
 print(f"Data loaded — Prices: {price_data.shape}, Occ1: {occ_room1.shape}, Occ2: {occ_room2.shape}")
 
@@ -115,7 +115,7 @@ for n, traj in enumerate(trajectories):
 # 6. OLS regression per timeslot → learn eta_t
 #    For each t: eta_t = argmin_w  sum_n (w' * phi(s_{n,t}) - V*(s_{n,t}))^2
 # =============================================================================
-eta = np.zeros((T_TOTAL, N_FEATURES))
+eta = np.zeros((T_TOTAL, N_FEATURES))  # shape (T, 7)
 
 for t in range(T_TOTAL):
     eta[t], _, _, _ = np.linalg.lstsq(State[t], V_star[:, t], rcond=None)
@@ -126,7 +126,7 @@ for t in range(T_TOTAL):
 # =============================================================================
 output_path = 'task4/eta.npy'
 np.save(output_path, eta)
-print(f"\nWeights saved to '{output_path}' — shape: {eta.shape}  ({T_TOTAL} timeslots x {N_FEATURES} features)")
+print(f"\nWeights saved to '{output_path}' — shape: {eta.shape}  ({T_TOTAL} timeslots x {N_FEATURES} features: [1, T1, T2, H, price, occ1, occ2])")
 
 # =============================================================================
 # 8. In-sample R² per timeslot (goodness-of-fit diagnostic)
@@ -138,3 +138,4 @@ for t in range(T_TOTAL):
     ss_tot = np.sum((V_star[:, t] - V_star[:, t].mean()) ** 2)
     r2     = 1 - ss_res / ss_tot if ss_tot > 0 else 1.0
     print(f"t={t}: R² = {r2:.4f}")
+    

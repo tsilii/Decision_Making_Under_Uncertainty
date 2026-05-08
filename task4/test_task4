@@ -301,7 +301,7 @@ if trajectories:
     check("V_star shape is (N, T)", v_star.shape == (len(trajectories), t_total),
           f"got {v_star.shape}")
     check("State shape is (T, N, 7)", state.shape == (t_total, len(trajectories), 7),
-          f"got {state.shape}") 
+          f"got {state.shape}")
     check("V_star is finite and non-positive", np.all(np.isfinite(v_star)) and np.all(v_star <= 1e-9),
           f"range [{v_star.min():.4f}, {v_star.max():.4f}]")
     check("terminal V_star is zero", np.allclose(v_star[:, -1], 0.0),

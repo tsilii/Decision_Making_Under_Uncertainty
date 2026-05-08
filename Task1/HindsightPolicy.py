@@ -17,7 +17,8 @@ import sys
 import os
 
 # ── paths ─────────────────────────────────────────────────────────────────────
-BASE_DIR  = "/Users/manostsili/Desktop/dtu/courses/decision making under uncertainty /assignment_DC"
+# BASE_DIR  = "/Users/manostsili/Desktop/dtu/courses/decision making under uncertainty /assignment_DC"
+BASE_DIR  = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 GIVEN_DIR = os.path.join(BASE_DIR, "given")
 DATA_DIR  = os.path.join(BASE_DIR, "data")
 sys.path.insert(0, GIVEN_DIR)
@@ -37,9 +38,9 @@ class HindsightPolicy:
 
     def __init__(self):
         """Load CSV data once at initialization."""
-        self.price_df = pd.read_csv(os.path.join(DATA_DIR, "v2_PriceData.csv"))
-        self.occ1_df  = pd.read_csv(os.path.join(DATA_DIR, "OccupancyRoom1.csv"))
-        self.occ2_df  = pd.read_csv(os.path.join(DATA_DIR, "OccupancyRoom2.csv"))
+        self.price_df = pd.read_csv(os.path.join(GIVEN_DIR, "PriceData.csv"))
+        self.occ1_df  = pd.read_csv(os.path.join(GIVEN_DIR, "OccupancyRoom1.csv"))
+        self.occ2_df  = pd.read_csv(os.path.join(GIVEN_DIR, "OccupancyRoom2.csv"))
         self.params   = SC.get_fixed_data()
 
         self.planned_p1  = None
@@ -62,7 +63,7 @@ class HindsightPolicy:
             day_idx = self.current_day
 
             price_row = self.price_df.iloc[day_idx].values
-            prices    = price_row[1:]                          # hours t=0..9
+            prices    = price_row[:self.params["num_timeslots"]]  # hours t=0..9
             occ1      = self.occ1_df.iloc[day_idx].values     # hours t=0..9
             occ2      = self.occ2_df.iloc[day_idx].values     # hours t=0..9
 

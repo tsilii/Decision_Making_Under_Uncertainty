@@ -31,7 +31,8 @@ import os
 from pyomo.environ import *
 
 # ── paths ─────────────────────────────────────────────────────────────────────
-BASE_DIR  = "/Users/manostsili/Desktop/dtu/courses/decision making under uncertainty /assignment_DC"
+# BASE_DIR  = "/Users/manostsili/Desktop/dtu/courses/decision making under uncertainty /assignment_DC"
+BASE_DIR  = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 GIVEN_DIR = os.path.join(BASE_DIR, "given")
 sys.path.insert(0, GIVEN_DIR)
 
