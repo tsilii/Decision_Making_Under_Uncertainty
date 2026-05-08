@@ -114,12 +114,12 @@ def plot_trajectories(r1_paths, r2_paths):
 
 
 if __name__ == "__main__":
-    r1, r2 = generate_trajectories(T=10, num_paths=100)
+    r1, r2 = generate_trajectories(T=10, num_paths=300)
     plot_trajectories(r1, r2)
 
-#import pandas as pd
+import pandas as pd
 
-#pd.DataFrame(r1).to_csv("OutOfSampleOccupancyRoom1.csv", index=False)
-#pd.DataFrame(r2).to_csv("OutOfSampleOccupancyRoom2.csv", index=False)
+pd.DataFrame(r1).to_csv("OutOfSampleOccupancyRoom1.2.csv", index=False)
+pd.DataFrame(r2).to_csv("OutOfSampleOccupancyRoom2.2.csv", index=False)
 
 

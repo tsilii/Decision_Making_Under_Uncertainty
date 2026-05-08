@@ -44,7 +44,7 @@ def price_model(current_price, previous_price):
 params = SystemCharacteristics.get_fixed_data()
 T = int(params['num_timeslots'])
 
-num_paths = 100
+num_paths = 300
 all_paths = []
 
 for i in range(num_paths):
@@ -77,5 +77,5 @@ plt.show()
 
 import pandas as pd
 
-#pd.DataFrame(all_paths).to_csv("OutOfSamplePriceData.csv", index=False)
+pd.DataFrame(all_paths).to_csv("OutOfSamplePriceData2.0.csv", index=False)
 

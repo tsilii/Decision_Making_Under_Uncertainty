@@ -1,0 +1,140 @@
+"""
+Task 4 - ADP Training Script
+=============================
+Trains the Value Function Approximation (VFA) weights for the ADP policy.
+
+Strategy (Optimistic in Hindsight, K=1):
+  - Solves the MILP (Task 1) for each training day to get hindsight-optimal trajectories
+  - Extracts the optimal state sequences and remaining costs (V*)
+  - Builds a feature vector phi(s) for each state
+  - Fits one OLS regression per timeslot: eta_t = argmin sum_n (eta_t' * phi(s_{n,t}) - V*(s_{n,t}))^2
+  - Saves the learned weights to 'eta.npy' for use in the ADP policy
+
+Usage:
+    python task4_training_vfa
+
+Output:
+    task4/eta.npy  -- array of shape (T_TOTAL, N_FEATURES) with the learned VFA weights
+"""
+
+import sys
+import numpy as np
+import pandas as pd
+
+ROOT      = r'c:\Users\rodri\Decision_Making_Under_Uncertainty'
+DATA_PATH = ROOT + r'\given'
+sys.path.append(DATA_PATH)
+sys.path.append(ROOT)
+
+import v2_SystemCharacteristics as sc
+from milp_solver import solve_milp_with_results
+
+# =============================================================================
+# 1. System parameters
+# =============================================================================
+params  = sc.get_fixed_data()
+T_TOTAL = int(params['num_timeslots'])  # timeslots per day
+
+# =============================================================================
+# 2. Load training data
+# =============================================================================
+price_data = pd.read_csv(f'{ROOT}/OutOfSamplePriceData2.0.csv')
+occ_room1  = pd.read_csv(f'{ROOT}/OutOfSampleOccupancyRoom1.2.csv')
+occ_room2  = pd.read_csv(f'{ROOT}/OutOfSampleOccupancyRoom2.2.csv')
+
+print(f"Data loaded — Prices: {price_data.shape}, Occ1: {occ_room1.shape}, Occ2: {occ_room2.shape}")
+
+# =============================================================================
+# 3. Collect hindsight-optimal trajectories via MILP
+#    For each training day, solve the MILP with full price/occupancy knowledge.
+# =============================================================================
+N_DAYS       = len(price_data)
+trajectories = []
+
+for day in range(N_DAYS):
+    prices = price_data.iloc[day, :].values
+    occ1   = occ_room1.iloc[day, :].values
+    occ2   = occ_room2.iloc[day, :].values
+
+    traj = solve_milp_with_results(prices, occ1, occ2, params)
+    trajectories.append(traj)
+
+print(f"\nTrajectories collected: {len(trajectories)} days x {T_TOTAL} timeslots")
+
+# =============================================================================
+# 4. Feature vector phi(s)
+#    State s = (endogenous, exogenous) = (T_r1, T_r2, H, price, occ1, occ2)
+#    The bias term (1.0) is included to allow an affine approximation.
+# =============================================================================
+P_VENT = float(params['ventilation_power'])
+
+def state(T_r1, T_r2, H, price, occ1, occ2):
+    return np.array([1.0, T_r1, T_r2, H, price, occ1, occ2])
+
+N_FEATURES = 7
+
+# =============================================================================
+# 5. Build V* targets and feature matrices
+#
+#    V*(s_{n,t}) = -(remaining optimal cost from t+1 to T) on trajectory n.
+#    Negated because we frame this as a value function (higher = better).
+#
+#    State features at timeslot t use the *next* endogenous state (post-transition)
+#    paired with the *current* exogenous inputs (price, occupancy).
+# =============================================================================
+N      = len(trajectories)
+V_star = np.zeros((N, T_TOTAL))             # OLS targets:  V_star[n, t]
+State  = np.zeros((T_TOTAL, N, N_FEATURES)) # OLS features: State[t, n, :]
+
+for n, traj in enumerate(trajectories):
+    prices = np.array(traj['price'])
+    h_r1   = np.array(traj['h_r1'])
+    h_r2   = np.array(traj['h_r2'])
+    v      = np.array(traj['v'])
+    T_r1_s = np.array(traj['Temp_r1'])
+    T_r2_s = np.array(traj['Temp_r2'])
+    H_s    = np.array(traj['Hum'])
+    occ1_s = np.array(traj['Occ_r1'])
+    occ2_s = np.array(traj['Occ_r2'])
+
+    cost_per_hour = prices * (h_r1 + h_r2 + P_VENT * v)
+
+    for t in range(T_TOTAL):
+        # Remaining cost after timeslot t (target for VFA at state s_t)
+        V_star[n, t] = -np.sum(cost_per_hour[t+1:])
+
+        # Features use next-state temperatures/humidity; at the last step use current state
+        if t < T_TOTAL - 1:
+            State[t, n] = state(T_r1_s[t+1], T_r2_s[t+1], H_s[t+1],
+                                prices[t], occ1_s[t], occ2_s[t])
+        else:
+            State[t, n] = state(T_r1_s[t], T_r2_s[t], H_s[t],
+                                prices[t], occ1_s[t], occ2_s[t])
+
+# =============================================================================
+# 6. OLS regression per timeslot → learn eta_t
+#    For each t: eta_t = argmin_w  sum_n (w' * phi(s_{n,t}) - V*(s_{n,t}))^2
+# =============================================================================
+eta = np.zeros((T_TOTAL, N_FEATURES))
+
+for t in range(T_TOTAL):
+    eta[t], _, _, _ = np.linalg.lstsq(State[t], V_star[:, t], rcond=None)
+    print(f"t={t}: eta = {eta[t].round(3)}")
+
+# =============================================================================
+# 7. Save weights
+# =============================================================================
+output_path = 'task4/eta.npy'
+np.save(output_path, eta)
+print(f"\nWeights saved to '{output_path}' — shape: {eta.shape}  ({T_TOTAL} timeslots x {N_FEATURES} features)")
+
+# =============================================================================
+# 8. In-sample R² per timeslot (goodness-of-fit diagnostic)
+#    Note: t=T-1 always gives R²=1.0 because V*(s_{n,T-1}) = 0 for all n.
+# =============================================================================
+for t in range(T_TOTAL):
+    pred   = State[t] @ eta[t]
+    ss_res = np.sum((V_star[:, t] - pred) ** 2)
+    ss_tot = np.sum((V_star[:, t] - V_star[:, t].mean()) ** 2)
+    r2     = 1 - ss_res / ss_tot if ss_tot > 0 else 1.0
+    print(f"t={t}: R² = {r2:.4f}")

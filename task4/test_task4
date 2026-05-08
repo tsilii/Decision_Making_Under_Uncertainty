@@ -1,0 +1,604 @@
+"""
+Task 4 validation tests
+=======================
+
+This script checks the pieces that matter for the ADP/VFA pipeline:
+  1. input data and system parameters are coherent;
+  2. the MILP solver returns usable trajectories;
+  3. MILP trajectories satisfy action bounds and state dynamics;
+  4. V* targets and feature matrices match task4_training_vfa;
+  5. OLS training diagnostics and saved eta.npy are sane.
+
+Run:
+    python task4/test_task4
+
+Optional:
+    set TASK4_TEST_DAYS=5            # default is 3, keep small because MILP is slow
+    set TASK4_POLICY_TEST_DAYS=3     # default is 2, out-of-sample ADP vs MILP days
+    set TASK4_BANG_BANG_DAYS=100     # optional: diagnose heater values across 100 MILP days
+"""
+
+import os
+import sys
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+
+ROOT = Path(r"c:\Users\rodri\Decision_Making_Under_Uncertainty")
+DATA_PATH = ROOT / "given"
+TASK4_PATH = ROOT / "task4"
+
+sys.path.append(str(DATA_PATH))
+sys.path.append(str(ROOT))
+sys.path.append(str(TASK4_PATH))
+
+import v2_SystemCharacteristics as sc
+from milp_solver import solve_milp_with_results
+
+
+N_TEST = int(os.getenv("TASK4_TEST_DAYS", "3"))
+N_POLICY_TEST = int(os.getenv("TASK4_POLICY_TEST_DAYS", "2"))
+BANG_BANG_DAYS = int(os.getenv("TASK4_BANG_BANG_DAYS", "100"))
+REQUIRED_KEYS = {
+    "price", "h_r1", "h_r2", "v",
+    "Temp_r1", "Temp_r2", "Hum",
+    "Occ_r1", "Occ_r2",
+}
+
+PASS = "PASS"
+FAIL = "FAIL"
+WARN = "WARN"
+results = []
+
+
+def section(title):
+    print("\n" + "=" * 72)
+    print(title)
+    print("=" * 72)
+
+
+def check(name, condition, detail=""):
+    ok = bool(condition)
+    results.append((name, ok))
+    print(f"  {PASS if ok else FAIL}  {name}")
+    if detail:
+        print(f"        {detail}")
+    return ok
+
+
+def warn(message):
+    print(f"  {WARN}  {message}")
+
+
+def trajectory_cost(traj, p_vent):
+    prices = np.array(traj["price"], dtype=float)
+    h_r1 = np.array(traj["h_r1"], dtype=float)
+    h_r2 = np.array(traj["h_r2"], dtype=float)
+    v = np.array(traj["v"], dtype=float)
+    return float(np.sum(prices * (h_r1 + h_r2 + p_vent * v)))
+
+
+def feature_state(T_r1, T_r2, H, price, occ1, occ2):
+    return np.array([1.0, T_r1, T_r2, H, price, occ1, occ2], dtype=float)
+
+
+def build_vfa_training_matrices(trajectories, params):
+    """Mirror task4_training_vfa exactly."""
+    t_total = int(params["num_timeslots"])
+    p_vent = float(params["ventilation_power"])
+    n = len(trajectories)
+    n_features = 7
+
+    v_star = np.zeros((n, t_total))
+    state = np.zeros((t_total, n, n_features))
+
+    for i, traj in enumerate(trajectories):
+        prices = np.array(traj["price"], dtype=float)
+        h_r1 = np.array(traj["h_r1"], dtype=float)
+        h_r2 = np.array(traj["h_r2"], dtype=float)
+        v = np.array(traj["v"], dtype=float)
+        T_r1 = np.array(traj["Temp_r1"], dtype=float)
+        T_r2 = np.array(traj["Temp_r2"], dtype=float)
+        H = np.array(traj["Hum"], dtype=float)
+        occ1 = np.array(traj["Occ_r1"], dtype=float)
+        occ2 = np.array(traj["Occ_r2"], dtype=float)
+
+        cost_per_hour = prices * (h_r1 + h_r2 + p_vent * v)
+
+        for t in range(t_total):
+            v_star[i, t] = -np.sum(cost_per_hour[t + 1:])
+
+            if t < t_total - 1:
+                state[t, i] = feature_state(
+                    T_r1[t + 1], T_r2[t + 1], H[t + 1],
+                    prices[t], occ1[t], occ2[t],
+                )
+            else:
+                state[t, i] = feature_state(
+                    T_r1[t], T_r2[t], H[t],
+                    prices[t], occ1[t], occ2[t],
+                )
+
+    return v_star, state
+
+
+def max_dynamics_error(traj, params):
+    t_total = int(params["num_timeslots"])
+    zeta_exch = float(params["heat_exchange_coeff"])
+    zeta_loss = float(params["thermal_loss_coeff"])
+    zeta_conv = float(params["heating_efficiency_coeff"])
+    zeta_cool = float(params["heat_vent_coeff"])
+    zeta_occ = float(params["heat_occupancy_coeff"])
+    eta_occ = float(params["humidity_occupancy_coeff"])
+    eta_vent = float(params["humidity_vent_coeff"])
+    T_out = list(params["outdoor_temperature"])
+
+    T1 = np.array(traj["Temp_r1"], dtype=float)
+    T2 = np.array(traj["Temp_r2"], dtype=float)
+    H = np.array(traj["Hum"], dtype=float)
+    p1 = np.array(traj["h_r1"], dtype=float)
+    p2 = np.array(traj["h_r2"], dtype=float)
+    v = np.array(traj["v"], dtype=float)
+    occ1 = np.array(traj["Occ_r1"], dtype=float)
+    occ2 = np.array(traj["Occ_r2"], dtype=float)
+
+    errors = []
+    for t in range(1, t_total):
+        pred_T1 = (
+            T1[t - 1]
+            + zeta_exch * (T2[t - 1] - T1[t - 1])
+            - zeta_loss * (T1[t - 1] - T_out[t - 1])
+            + zeta_conv * p1[t - 1]
+            - zeta_cool * v[t - 1]
+            + zeta_occ * occ1[t - 1]
+        )
+        pred_T2 = (
+            T2[t - 1]
+            + zeta_exch * (T1[t - 1] - T2[t - 1])
+            - zeta_loss * (T2[t - 1] - T_out[t - 1])
+            + zeta_conv * p2[t - 1]
+            - zeta_cool * v[t - 1]
+            + zeta_occ * occ2[t - 1]
+        )
+        pred_H = H[t - 1] + eta_occ * (occ1[t - 1] + occ2[t - 1]) - eta_vent * v[t - 1]
+        errors.extend([abs(T1[t] - pred_T1), abs(T2[t] - pred_T2), abs(H[t] - pred_H)])
+
+    return max(errors) if errors else 0.0
+
+
+def heater_is_bang_bang(values, p_max, tol=1e-6):
+    values = np.array(values, dtype=float)
+    return np.all(np.isclose(values, 0.0, atol=tol) | np.isclose(values, p_max, atol=tol))
+
+
+def intermediate_heater_values(values, p_max, tol=1e-6):
+    values = np.array(values, dtype=float).ravel()
+    mask = ~(np.isclose(values, 0.0, atol=tol) | np.isclose(values, p_max, atol=tol))
+    return np.unique(np.round(values[mask], 6))
+
+
+section("A. Parameters And Data")
+params = sc.get_fixed_data()
+t_total = int(params["num_timeslots"])
+p_vent = float(params["ventilation_power"])
+p_max = float(params["heating_max_power"])
+
+check("num_timeslots is positive", t_total > 0, f"got {t_total}")
+check("ventilation_power > 0", p_vent > 0, f"got {p_vent}")
+check("heating_max_power > 0", p_max > 0, f"got {p_max}")
+
+price_data = pd.read_csv(DATA_PATH / "PriceData.csv")
+occ_room1 = pd.read_csv(DATA_PATH / "OccupancyRoom1.csv")
+occ_room2 = pd.read_csv(DATA_PATH / "OccupancyRoom2.csv")
+
+n_available = min(len(price_data), len(occ_room1), len(occ_room2))
+n_test = min(N_TEST, n_available)
+
+check("training data has at least one day", n_available > 0, f"got {n_available}")
+check("each data file has num_timeslots columns", (
+    price_data.shape[1] == t_total
+    and occ_room1.shape[1] == t_total
+    and occ_room2.shape[1] == t_total
+), f"shapes: price={price_data.shape}, occ1={occ_room1.shape}, occ2={occ_room2.shape}")
+
+sample_prices = price_data.iloc[:n_test, :].to_numpy(dtype=float)
+sample_occ1 = occ_room1.iloc[:n_test, :].to_numpy(dtype=float)
+sample_occ2 = occ_room2.iloc[:n_test, :].to_numpy(dtype=float)
+
+check("sample prices are finite and non-negative",
+      np.all(np.isfinite(sample_prices)) and np.all(sample_prices >= 0),
+      f"range [{sample_prices.min():.4f}, {sample_prices.max():.4f}]")
+check("sample occupancies are finite and non-negative",
+      np.all(np.isfinite(sample_occ1)) and np.all(np.isfinite(sample_occ2))
+      and np.all(sample_occ1 >= 0) and np.all(sample_occ2 >= 0),
+      f"occ1 max={sample_occ1.max():.2f}, occ2 max={sample_occ2.max():.2f}")
+
+
+section(f"B. MILP Solver Smoke Test ({n_test} days)")
+trajectories = []
+failed_days = []
+
+for day in range(n_test):
+    prices = price_data.iloc[day, :].to_numpy(dtype=float)
+    occ1 = occ_room1.iloc[day, :].to_numpy(dtype=float)
+    occ2 = occ_room2.iloc[day, :].to_numpy(dtype=float)
+
+    try:
+        traj = solve_milp_with_results(prices, occ1, occ2, params)
+    except Exception as exc:
+        warn(f"day {day + 1} failed: {exc}")
+        failed_days.append(day)
+        continue
+
+    missing = REQUIRED_KEYS - set(traj.keys())
+    bad_lengths = [key for key in REQUIRED_KEYS if key in traj and len(traj[key]) != t_total]
+
+    if missing or bad_lengths:
+        warn(f"day {day + 1} invalid trajectory; missing={missing}, bad_lengths={bad_lengths}")
+        failed_days.append(day)
+        continue
+
+    trajectories.append(traj)
+    cost = trajectory_cost(traj, p_vent)
+    print(f"  solved day {day + 1}/{n_test}: cost={cost:.2f}")
+
+check("at least one MILP trajectory solved", len(trajectories) > 0,
+      f"success={len(trajectories)}, failed={len(failed_days)}")
+
+
+section("C. MILP Trajectory Validity")
+if trajectories:
+    h1 = np.array([traj["h_r1"] for traj in trajectories], dtype=float)
+    h2 = np.array([traj["h_r2"] for traj in trajectories], dtype=float)
+    v = np.array([traj["v"] for traj in trajectories], dtype=float)
+    T1 = np.array([traj["Temp_r1"] for traj in trajectories], dtype=float)
+    T2 = np.array([traj["Temp_r2"] for traj in trajectories], dtype=float)
+    H = np.array([traj["Hum"] for traj in trajectories], dtype=float)
+    costs = np.array([trajectory_cost(traj, p_vent) for traj in trajectories])
+
+    check("heating h_r1 is within [0, P_max]", np.all((h1 >= -1e-7) & (h1 <= p_max + 1e-7)),
+          f"range [{h1.min():.4f}, {h1.max():.4f}], P_max={p_max:.4f}")
+    check("heating h_r2 is within [0, P_max]", np.all((h2 >= -1e-7) & (h2 <= p_max + 1e-7)),
+          f"range [{h2.min():.4f}, {h2.max():.4f}], P_max={p_max:.4f}")
+    check("MILP h_r1 is always 0 or P_max",
+          heater_is_bang_bang(h1, p_max),
+          f"intermediate values: {intermediate_heater_values(h1, p_max)}")
+    check("MILP h_r2 is always 0 or P_max",
+          heater_is_bang_bang(h2, p_max),
+          f"intermediate values: {intermediate_heater_values(h2, p_max)}")
+    check("ventilation v is binary", np.all(np.isclose(v, 0.0) | np.isclose(v, 1.0)),
+          f"unique={np.unique(np.round(v, 6))}")
+    check("initial states match system parameters",
+          np.allclose(T1[:, 0], float(params["T1"]))
+          and np.allclose(T2[:, 0], float(params["T2"]))
+          and np.allclose(H[:, 0], float(params["H"])),
+          f"T1_0={T1[:, 0]}, T2_0={T2[:, 0]}, H_0={H[:, 0]}")
+    check("temperatures are finite and plausible",
+          np.all(np.isfinite(T1)) and np.all(np.isfinite(T2))
+          and np.all((T1 >= 0) & (T1 <= 50)) and np.all((T2 >= 0) & (T2 <= 50)),
+          f"T1 range [{T1.min():.2f}, {T1.max():.2f}], T2 range [{T2.min():.2f}, {T2.max():.2f}]")
+    check("humidity is finite and plausible",
+          np.all(np.isfinite(H)) and np.all((H >= 0) & (H <= 100)),
+          f"range [{H.min():.2f}, {H.max():.2f}]")
+    check("trajectory costs are finite and non-negative",
+          np.all(np.isfinite(costs)) and np.all(costs >= 0),
+          f"range [{costs.min():.2f}, {costs.max():.2f}]")
+
+    dyn_errors = np.array([max_dynamics_error(traj, params) for traj in trajectories])
+    check("MILP trajectories satisfy temperature/humidity dynamics",
+          np.max(dyn_errors) < 1e-5,
+          f"max dynamics error={np.max(dyn_errors):.2e}")
+else:
+    warn("skipping trajectory checks because no MILP trajectory solved")
+
+
+section("D. VFA Target And Feature Matrix")
+if trajectories:
+    v_star, state = build_vfa_training_matrices(trajectories, params)
+
+    check("V_star shape is (N, T)", v_star.shape == (len(trajectories), t_total),
+          f"got {v_star.shape}")
+    check("State shape is (T, N, 7)", state.shape == (t_total, len(trajectories), 7),
+          f"got {state.shape}") 
+    check("V_star is finite and non-positive", np.all(np.isfinite(v_star)) and np.all(v_star <= 1e-9),
+          f"range [{v_star.min():.4f}, {v_star.max():.4f}]")
+    check("terminal V_star is zero", np.allclose(v_star[:, -1], 0.0),
+          f"max abs={np.max(np.abs(v_star[:, -1])):.2e}")
+    check("V_star is non-decreasing over time",
+          all(np.all(v_star[i, :-1] <= v_star[i, 1:] + 1e-9) for i in range(len(trajectories))))
+    check("State matrix is finite", np.all(np.isfinite(state)))
+else:
+    v_star = None
+    state = None
+    warn("skipping VFA matrix checks because no MILP trajectory solved")
+
+
+section("E. OLS Diagnostics")
+if trajectories:
+    eta = np.zeros((t_total, 7))
+    r2_values = []
+
+    for t in range(t_total):
+        eta[t], _, _, _ = np.linalg.lstsq(state[t], v_star[:, t], rcond=None)
+        pred = state[t] @ eta[t]
+        ss_res = np.sum((v_star[:, t] - pred) ** 2)
+        ss_tot = np.sum((v_star[:, t] - v_star[:, t].mean()) ** 2)
+        r2 = 1 - ss_res / ss_tot if ss_tot > 1e-12 else 1.0
+        r2_values.append(r2)
+
+    check("OLS eta is finite", np.all(np.isfinite(eta)))
+    check("OLS predictions are finite",
+          all(np.all(np.isfinite(state[t] @ eta[t])) for t in range(t_total)))
+
+    print("  R2 by timeslot:")
+    for t, r2 in enumerate(r2_values):
+        label = "terminal" if t == t_total - 1 else ""
+        print(f"    t={t:2d}: {r2:8.4f} {label}")
+
+    if any(r2 < 0 for r2 in r2_values[:-1]):
+        warn("some non-terminal R2 values are negative; the linear VFA is weaker than a mean predictor there")
+else:
+    warn("skipping OLS diagnostics because no MILP trajectory solved")
+
+
+section("F. Saved eta.npy")
+eta_path = TASK4_PATH / "eta.npy"
+check("eta.npy exists", eta_path.exists(), str(eta_path))
+
+if eta_path.exists():
+    saved_eta = np.load(eta_path)
+    check("saved eta has shape (T, 7)", saved_eta.shape == (t_total, 7),
+          f"got {saved_eta.shape}")
+    check("saved eta is finite", np.all(np.isfinite(saved_eta)))
+
+
+section("G. 100-Day Heater Bang-Bang Diagnostic")
+if BANG_BANG_DAYS <= 0:
+    warn("skipping 100-day heater diagnostic; set TASK4_BANG_BANG_DAYS=100 to run it")
+else:
+    n_bang = min(BANG_BANG_DAYS, n_available)
+    h1_values = []
+    h2_values = []
+    bang_failed_days = []
+
+    print(f"  Solving {n_bang} MILP days for heater-value diagnostic...")
+    for day in range(n_bang):
+        prices = price_data.iloc[day, :].to_numpy(dtype=float)
+        occ1 = occ_room1.iloc[day, :].to_numpy(dtype=float)
+        occ2 = occ_room2.iloc[day, :].to_numpy(dtype=float)
+
+        try:
+            traj = solve_milp_with_results(prices, occ1, occ2, params)
+        except Exception as exc:
+            warn(f"day {day + 1} failed during bang-bang diagnostic: {exc}")
+            bang_failed_days.append(day)
+            continue
+
+        h1_values.extend(traj["h_r1"])
+        h2_values.extend(traj["h_r2"])
+
+    h1_values = np.array(h1_values, dtype=float)
+    h2_values = np.array(h2_values, dtype=float)
+
+    if len(h1_values) == 0:
+        warn("no heater values collected for bang-bang diagnostic")
+    else:
+        h1_mid = intermediate_heater_values(h1_values, p_max)
+        h2_mid = intermediate_heater_values(h2_values, p_max)
+        h1_unique = np.unique(np.round(h1_values, 6))
+        h2_unique = np.unique(np.round(h2_values, 6))
+
+        print(f"  Days solved: {n_bang - len(bang_failed_days)}/{n_bang}")
+        print(f"  h_r1 unique values: {h1_unique}")
+        print(f"  h_r2 unique values: {h2_unique}")
+        print(f"  h_r1 intermediate values: {h1_mid}")
+        print(f"  h_r2 intermediate values: {h2_mid}")
+
+        check("100-day MILP h_r1 is always 0 or P_max",
+              heater_is_bang_bang(h1_values, p_max),
+              f"intermediate values: {h1_mid}")
+        check("100-day MILP h_r2 is always 0 or P_max",
+              heater_is_bang_bang(h2_values, p_max),
+              f"intermediate values: {h2_mid}")
+
+
+section("H. ADP Policy Test")
+if not eta_path.exists():
+    warn("skipping ADP policy test because eta.npy not found")
+elif not trajectories:
+    warn("skipping ADP policy test because no MILP trajectory solved")
+else:
+    from pyomo.environ import ConcreteModel, Var, Objective, NonNegativeReals, Binary, SolverFactory, value as pyo_value, minimize as pyo_minimize
+
+    def _solve_adp_step(t, T_r1, T_r2, H, price, occ1, occ2, vent_counter, low_r1, low_r2, eta_weights):
+        P_max     = float(params['heating_max_power'])
+        P_vent    = float(params['ventilation_power'])
+        zeta_exch = float(params['heat_exchange_coeff'])
+        zeta_loss = float(params['thermal_loss_coeff'])
+        zeta_conv = float(params['heating_efficiency_coeff'])
+        zeta_cool = float(params['heat_vent_coeff'])
+        zeta_occ  = float(params['heat_occupancy_coeff'])
+        eta_occ   = float(params['humidity_occupancy_coeff'])
+        eta_vent  = float(params['humidity_vent_coeff'])
+        T_out     = list(params['outdoor_temperature'])
+        T_low     = float(params['temp_min_comfort_threshold'])
+        T_ok      = float(params['temp_OK_threshold'])
+        T_high    = float(params['temp_max_comfort_threshold'])
+        H_high    = float(params['humidity_threshold'])
+        U_vent    = int(params['vent_min_up_time'])
+
+        m    = ConcreteModel()
+        m.p1 = Var(domain=NonNegativeReals, bounds=(0, P_max))
+        m.p2 = Var(domain=NonNegativeReals, bounds=(0, P_max))
+        m.v  = Var(domain=Binary)
+
+        hum_override = H > H_high or (1 <= vent_counter <= U_vent - 1)
+        if hum_override:
+            m.v.fix(1)
+
+        if T_r1 < T_low:  low_r1 = 1
+        if low_r1 == 1 and T_r1 >= T_ok: low_r1 = 0
+        if low_r1 == 1 and T_r1 < T_ok:  m.p1.fix(P_max)
+        if T_r1 > T_high: m.p1.fix(0)
+
+        if T_r2 < T_low:  low_r2 = 1
+        if low_r2 == 1 and T_r2 >= T_ok: low_r2 = 0
+        if low_r2 == 1 and T_r2 < T_ok:  m.p2.fix(P_max)
+        if T_r2 > T_high: m.p2.fix(0)
+
+        def nT1(m): return T_r1 + zeta_exch*(T_r2-T_r1) - zeta_loss*(T_r1-T_out[t]) + zeta_conv*m.p1 - zeta_cool*m.v + zeta_occ*occ1
+        def nT2(m): return T_r2 + zeta_exch*(T_r1-T_r2) - zeta_loss*(T_r2-T_out[t]) + zeta_conv*m.p2 - zeta_cool*m.v + zeta_occ*occ2
+        def nH(m):  return H + eta_occ*(occ1+occ2) - eta_vent*m.v
+
+        w = eta_weights[t]
+        def obj(m): return price*(m.p1+m.p2+P_vent*m.v) - w[0] - w[1]*nT1(m) - w[2]*nT2(m) - w[3]*nH(m) - w[4]*price - w[5]*occ1 - w[6]*occ2
+        m.obj = Objective(rule=obj, sense=pyo_minimize)
+
+        SolverFactory('gurobi').solve(m, tee=False)
+
+        v_val = pyo_value(m.v)
+        vent_counter = vent_counter + 1 if v_val == 1 else 0
+        return (pyo_value(m.p1), pyo_value(m.p2), v_val,
+                low_r1, low_r2, vent_counter,
+                pyo_value(nT1(m)), pyo_value(nT2(m)), pyo_value(nH(m)),
+                hum_override)
+
+    oos_price_path = ROOT / "OutOfSamplePriceData.csv"
+    oos_occ1_path = ROOT / "OutOfSampleOccupancyRoom1.csv"
+    oos_occ2_path = ROOT / "OutOfSampleOccupancyRoom2.csv"
+
+    policy_trajectories = []
+    if oos_price_path.exists() and oos_occ1_path.exists() and oos_occ2_path.exists():
+        oos_price = pd.read_csv(oos_price_path)
+        oos_occ1 = pd.read_csv(oos_occ1_path)
+        oos_occ2 = pd.read_csv(oos_occ2_path)
+        n_policy = min(N_POLICY_TEST, len(oos_price), len(oos_occ1), len(oos_occ2))
+
+        print(f"  Solving out-of-sample MILP benchmarks for {n_policy} policy-test days...")
+        for day in range(n_policy):
+            prices = oos_price.iloc[day, :].to_numpy(dtype=float)
+            occ1 = oos_occ1.iloc[day, :].to_numpy(dtype=float)
+            occ2 = oos_occ2.iloc[day, :].to_numpy(dtype=float)
+            try:
+                policy_trajectories.append(solve_milp_with_results(prices, occ1, occ2, params))
+            except Exception as exc:
+                warn(f"out-of-sample MILP benchmark day {day + 1} failed: {exc}")
+    else:
+        warn("out-of-sample data files not found; using the earlier in-sample MILP trajectories for policy smoke test")
+        policy_trajectories = trajectories[:min(N_POLICY_TEST, len(trajectories))]
+
+    if not policy_trajectories:
+        warn("skipping ADP policy rollout because no benchmark trajectories are available")
+
+    eta_weights = np.load(eta_path)
+    adp_costs, milp_costs_g = [], []
+    adp_h1_values, adp_h2_values = [], []
+    all_actions_valid = True
+    all_states_valid  = True
+    all_overrule_ok   = True
+    all_hum_vent_ok   = True
+
+    for idx, traj in enumerate(policy_trajectories):
+        prices_d = np.array(traj['price'])
+        occ1_d   = np.array(traj['Occ_r1'])
+        occ2_d   = np.array(traj['Occ_r2'])
+
+        T_r1 = float(params['T1'])
+        T_r2 = float(params['T2'])
+        H    = float(params['H'])
+        vc   = int(params['vent_counter'])
+        lr1  = int(params['low_override_r1'])
+        lr2  = int(params['low_override_r2'])
+        P_max  = float(params['heating_max_power'])
+        P_vent = float(params['ventilation_power'])
+        H_high = float(params['humidity_threshold'])
+        U_vent = int(params['vent_min_up_time'])
+        T_ok   = float(params['temp_OK_threshold'])
+
+        day_cost = 0.0
+        print(f"\n  --- ADP Day {idx+1} ---")
+        print(f"  {'hr':>3}  {'price':>7}  {'h_r1':>7}  {'h_r2':>7}  {'v':>3}  {'Hum':>7}  {'lov_r1':>7}  {'lov_r2':>7}  {'T_r1':>7}  {'T_r2':>7}")
+
+        for t in range(t_total):
+            price = prices_d[t]
+            occ1  = occ1_d[t]
+            occ2  = occ2_d[t]
+            prev_lr1 = lr1
+            prev_lr2 = lr2
+            prev_T1 = T_r1
+            prev_T2 = T_r2
+
+            h1, h2, v, lr1, lr2, vc, T_r1, T_r2, H, hum_ov = _solve_adp_step(
+                t, T_r1, T_r2, H, price, occ1, occ2, vc, lr1, lr2, eta_weights
+            )
+            day_cost += price * (h1 + h2 + P_vent * v)
+            adp_h1_values.append(h1)
+            adp_h2_values.append(h2)
+
+            print(f"  {t:3d}  {price:7.4f}  {h1:7.4f}  {h2:7.4f}  {int(round(v)):3d}  {H:7.2f}  {int(lr1):7d}  {int(lr2):7d}  {T_r1:7.2f}  {T_r2:7.2f}")
+
+            if not (-1e-6 <= h1 <= P_max + 1e-6 and -1e-6 <= h2 <= P_max + 1e-6):
+                all_actions_valid = False
+            if not (np.isclose(v, 0) or np.isclose(v, 1)):
+                all_actions_valid = False
+            if not (0 <= T_r1 <= 50 and 0 <= T_r2 <= 50):
+                all_states_valid = False
+            if not (0 <= H <= 100):
+                all_states_valid = False
+            if hum_ov and not np.isclose(v, 1):
+                all_hum_vent_ok = False
+            if prev_lr1 == 1 and prev_T1 < T_ok and not np.isclose(h1, P_max, atol=1e-4):
+                all_overrule_ok = False
+            if prev_lr2 == 1 and prev_T2 < T_ok and not np.isclose(h2, P_max, atol=1e-4):
+                all_overrule_ok = False
+
+        adp_costs.append(day_cost)
+        milp_cost = trajectory_cost(traj, P_vent)
+        milp_costs_g.append(milp_cost)
+        gap = day_cost - milp_cost
+        gap_pct = 100.0 * gap / milp_cost if abs(milp_cost) > 1e-9 else float('nan')
+        print(f"  ADP cost={day_cost:.2f}  MILP cost={milp_cost:.2f}  gap={gap:.2f} ({gap_pct:.1f}%)")
+
+    check("ADP heating actions within [0, P_max]", all_actions_valid)
+    check("ADP h_r1 is always 0 or P_max",
+          heater_is_bang_bang(adp_h1_values, float(params['heating_max_power'])),
+          f"intermediate values: {intermediate_heater_values(adp_h1_values, float(params['heating_max_power']))}")
+    check("ADP h_r2 is always 0 or P_max",
+          heater_is_bang_bang(adp_h2_values, float(params['heating_max_power'])),
+          f"intermediate values: {intermediate_heater_values(adp_h2_values, float(params['heating_max_power']))}")
+    check("ADP ventilation is binary", all_actions_valid)
+    check("ADP temperatures plausible [0, 50]°C", all_states_valid)
+    check("ADP humidity plausible [0, 100]%", all_states_valid)
+    check("ADP humidity overrule forces ventilation ON", all_hum_vent_ok)
+    check("ADP low-temperature overrule forces heating to P_max", all_overrule_ok)
+
+    avg_adp  = np.mean(adp_costs)
+    avg_milp = np.mean(milp_costs_g)
+    avg_gap  = avg_adp - avg_milp
+    avg_gap_pct = 100.0 * avg_gap / avg_milp if abs(avg_milp) > 1e-9 else float('nan')
+    print(f"\n  Avg ADP cost:  {avg_adp:.2f}")
+    print(f"  Avg MILP cost: {avg_milp:.2f}")
+    print(f"  Avg gap:       {avg_gap:.2f} ({avg_gap_pct:.1f}%)")
+    check("ADP-MILP gap is non-negative (ADP >= hindsight)", avg_gap >= -1e-4,
+          f"gap={avg_gap:.4f}")
+    check("ADP-MILP gap is below 200% (sanity bound)", avg_gap_pct < 200,
+          f"gap={avg_gap_pct:.1f}%")
+
+
+section("I. Summary")
+passed = sum(ok for _, ok in results)
+failed = len(results) - passed
+print(f"  Days solved: {len(trajectories)}/{n_test}")
+print(f"  Tests:       {len(results)}")
+print(f"  Passed:      {passed}")
+print(f"  Failed:      {failed}")
+
+if failed:
+    print("\n  Failed checks:")
+    for name, ok in results:
+        if not ok:
+            print(f"    - {name}")
+else:
+    print("\n  All checks passed.")

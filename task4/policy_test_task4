@@ -1,0 +1,199 @@
+# =============================================================================
+# Task 4 — ADP Policy Test (Out-of-Sample Evaluation)
+# =============================================================================
+# Runs the ADP policy on out-of-sample data and compares against the MILP
+# hindsight-optimal solution to measure the optimality gap.
+#
+# The ADP policy at each timeslot t solves a one-step lookahead:
+#   min  price * (p1 + p2 + P_vent * v)  -  eta[t]' * phi(s_{t+1})
+# where eta[t] is the learned VFA weight vector for timeslot t.
+#
+# Overrule logic enforces hard comfort constraints that the VFA might violate:
+#   - Ventilation is forced on when humidity is too high or minimum up-time applies
+#   - Heating is forced to max when a room is in a "low temperature" recovery mode
+#   - Heating is forced off when a room exceeds the upper comfort threshold
+# =============================================================================
+
+import sys
+import numpy as np
+import pandas as pd
+from pyomo.environ import (
+    ConcreteModel, Var, Objective,
+    NonNegativeReals, Binary, SolverFactory, value, minimize
+)
+from milp_solver import solve_milp_with_results
+
+# --- Paths -------------------------------------------------------------------
+ROOT      = r'c:\Users\rodri\Decision_Making_Under_Uncertainty'
+DATA_PATH = ROOT + r'\given'
+sys.path.append(DATA_PATH)
+sys.path.append(ROOT)
+sys.path.append(ROOT + r'\task4')
+
+import v2_SystemCharacteristics as sc
+
+params = sc.get_fixed_data()
+
+# --- VFA weights (trained by task4_training_vfa) -----------------------------
+eta = np.load('task4/eta.npy')
+
+# --- Out-of-sample data ------------------------------------------------------
+price_data = pd.read_csv(f'{ROOT}/OutOfSamplePriceData.csv')
+occ_room1  = pd.read_csv(f'{ROOT}/OutOfSampleOccupancyRoom1.csv')
+occ_room2  = pd.read_csv(f'{ROOT}/OutOfSampleOccupancyRoom2.csv')
+
+N_DAYS     = len(price_data)
+N_FEATURES = 7
+T_TOTAL    = int(params['num_timeslots'])
+
+# --- Feature vector (must match training exactly) ----------------------------
+def state(T_r1, T_r2, H, price, occ1, occ2):
+    return np.array([1.0, T_r1, T_r2, H, price, occ1, occ2])
+
+# --- One-step ADP decision ---------------------------------------------------
+def solve_adp_step(t, T_r1, T_r2, H, price, occ1, occ2, vent_counter, low_r1, low_r2):
+    """
+    Solves the ADP one-step subproblem at timeslot t.
+    Returns the optimal actions (p1, p2, v) and the updated state/flags.
+    """
+    P_max     = float(params['heating_max_power'])
+    P_vent    = float(params['ventilation_power'])
+    zeta_exch = float(params['heat_exchange_coeff'])
+    zeta_loss = float(params['thermal_loss_coeff'])
+    zeta_conv = float(params['heating_efficiency_coeff'])
+    zeta_cool = float(params['heat_vent_coeff'])
+    zeta_occ  = float(params['heat_occupancy_coeff'])
+    eta_occ   = float(params['humidity_occupancy_coeff'])
+    eta_vent  = float(params['humidity_vent_coeff'])
+    T_out     = list(params['outdoor_temperature'])
+
+    model    = ConcreteModel()
+    model.p1 = Var(domain=NonNegativeReals, bounds=(0, P_max))
+    model.p2 = Var(domain=NonNegativeReals, bounds=(0, P_max))
+    model.v  = Var(domain=Binary)
+
+    # --- Comfort constraint overrides (applied before optimization) ----------
+    T_low  = float(params['temp_min_comfort_threshold'])
+    T_ok   = float(params['temp_OK_threshold'])
+    T_high = float(params['temp_max_comfort_threshold'])
+    H_high = float(params['humidity_threshold'])
+    U_vent = int(params['vent_min_up_time'])
+
+    # Force ventilation on if humidity exceeds threshold or minimum up-time not yet met
+    if H > H_high or (1 <= vent_counter <= U_vent - 1):
+        model.v.fix(1)
+
+    # Room 1: force max heating if in recovery mode; force off if overheating
+    if T_r1 < T_low: low_r1 = 1
+    if low_r1 == 1 and T_r1 >= T_ok: low_r1 = 0
+    if low_r1 == 1 and T_r1 < T_ok:
+        model.p1.fix(P_max)
+    if T_r1 > T_high:
+        model.p1.fix(0)
+
+    # Room 2: same logic as Room 1
+    if T_r2 < T_low: low_r2 = 1
+    if low_r2 == 1 and T_r2 >= T_ok: low_r2 = 0
+    if low_r2 == 1 and T_r2 < T_ok:
+        model.p2.fix(P_max)
+    if T_r2 > T_high:
+        model.p2.fix(0)
+
+    # --- Linear state transition expressions ---------------------------------
+    def next_T1(m): return T_r1 + zeta_exch*(T_r2-T_r1) - zeta_loss*(T_r1-T_out[t]) + zeta_conv*m.p1 - zeta_cool*m.v + zeta_occ*occ1
+    def next_T2(m): return T_r2 + zeta_exch*(T_r1-T_r2) - zeta_loss*(T_r2-T_out[t]) + zeta_conv*m.p2 - zeta_cool*m.v + zeta_occ*occ2
+    def next_H(m):  return H + eta_occ*(occ1+occ2) - eta_vent*m.v
+
+    # --- Objective: immediate cost - VFA approximation of future cost --------
+    # min  c_t(a) - eta[t]' * phi(s_{t+1})
+    w = eta[t]
+    def obj_rule(m): return price * (m.p1 + m.p2 + P_vent * m.v) - w[0] - w[1]*next_T1(m) - w[2]*next_T2(m) - w[3]*next_H(m) - w[4]*price - w[5]*occ1 - w[6]*occ2
+
+    model.obj = Objective(rule=obj_rule, sense=minimize)
+
+    solver = SolverFactory('gurobi')
+    solver.solve(model, tee=False)
+
+    # Update ventilation counter (tracks consecutive on-periods for min up-time)
+    vent_counter = vent_counter + 1 if value(model.v) == 1 else 0
+
+    new_T1 = value(next_T1(model))
+    new_T2 = value(next_T2(model))
+    new_H  = value(next_H(model))
+
+    return value(model.p1), value(model.p2), value(model.v), low_r1, low_r2, vent_counter, new_T1, new_T2, new_H
+
+# --- Helper: compute total cost from a MILP trajectory dict ------------------
+def trajectory_cost(traj):
+    prices = np.array(traj['price'])
+    h_r1   = np.array(traj['h_r1'])
+    h_r2   = np.array(traj['h_r2'])
+    v      = np.array(traj['v'])
+    P_vent = float(params['ventilation_power'])
+    return float(np.sum(prices * (h_r1 + h_r2 + P_vent * v)))
+
+# =============================================================================
+# Main evaluation loop
+# =============================================================================
+total_costs = []
+milp_costs  = []
+
+# Set to None to compare every day, or 0 to skip MILP comparison entirely
+COMPARE_MILP_DAYS = None
+
+print(f"Running ADP policy on {N_DAYS} days ({T_TOTAL} timeslots/day)...")
+
+for day in range(N_DAYS):
+    # Load this day's price and occupancy data
+    prices_oos = price_data.iloc[day, :].values
+    occ1_oos   = occ_room1.iloc[day, :].values
+    occ2_oos   = occ_room2.iloc[day, :].values
+
+    # Reset state to initial conditions at the start of each day
+    T_r1        = float(params['T1'])
+    T_r2        = float(params['T2'])
+    H           = float(params['H'])
+    vent_counter = float(params['vent_counter'])
+    low_r1      = float(params['low_override_r1'])
+    low_r2      = float(params['low_override_r2'])
+    P_vent      = float(params['ventilation_power'])
+
+    # Roll out the ADP policy across all timeslots
+    day_cost = 0.0
+    for t in range(T_TOTAL):
+        price = prices_oos[t]
+        occ1  = occ1_oos[t]
+        occ2  = occ2_oos[t]
+        h_r1, h_r2, v, low_r1, low_r2, vent_counter, T_r1, T_r2, H = solve_adp_step(
+            t, T_r1, T_r2, H, price, occ1, occ2, vent_counter, low_r1, low_r2
+        )
+        day_cost += price * (h_r1 + h_r2 + P_vent * v)
+
+    total_costs.append(day_cost)
+
+    # Optionally solve MILP for this day and compute the optimality gap
+    run_milp = COMPARE_MILP_DAYS is None or day < COMPARE_MILP_DAYS
+    if run_milp:
+        milp_traj = solve_milp_with_results(prices_oos, occ1_oos, occ2_oos, params)
+        cost_milp = trajectory_cost(milp_traj)
+        milp_costs.append(cost_milp)
+
+        gap     = day_cost - cost_milp
+        gap_pct = 100.0 * gap / cost_milp if abs(cost_milp) > 1e-9 else np.nan
+        print(
+            f"  Day {day+1:3d}/{N_DAYS}  |  ADP: {day_cost:8.2f}  |  "
+            f"MILP: {cost_milp:8.2f}  |  gap: {gap:7.2f} ({gap_pct:6.2f}%)  |  "
+            f"avg ADP: {np.mean(total_costs):8.2f}"
+        )
+    else:
+        print(f"  Day {day+1:3d}/{N_DAYS}  |  ADP: {day_cost:8.2f}  |  avg: {np.mean(total_costs):8.2f}")
+
+# =============================================================================
+# Summary
+# =============================================================================
+print(f"\nAverage total cost (ADP Policy): {np.mean(total_costs):.2f}")
+if milp_costs:
+    print(f"Average total cost (MILP):       {np.mean(milp_costs):.2f}")
+    gap_total     = np.mean(total_costs) - np.mean(milp_costs)
+    gap_total_pct = 100.0 * gap_total / np.mean(milp_costs)
+    print(f"Average gap ADP-MILP:            {gap_total:.2f} ({gap_total_pct:.2f}%)")
