@@ -54,6 +54,9 @@ class HindsightPolicy:
         Called by the environment at each hour.
         At t=0: solve MILP for full day → store plan.
         At t>0: return pre-planned action.
+        Overrule controllers are applied on the actual environment state so
+        that the returned action matches what the environment will compute as
+        the effective action — mirroring how ADPPolicy handles overrules.
         """
         t = state["current_time"]
 
@@ -63,17 +66,60 @@ class HindsightPolicy:
             day_idx = self.current_day
 
             price_row = self.price_df.iloc[day_idx].values
-            prices    = price_row[:self.params["num_timeslots"]]  # hours t=0..9
-            occ1      = self.occ1_df.iloc[day_idx].values     # hours t=0..9
-            occ2      = self.occ2_df.iloc[day_idx].values     # hours t=0..9
+            prices    = price_row[:self.params["num_timeslots"]]
+            occ1      = self.occ1_df.iloc[day_idx].values
+            occ2      = self.occ2_df.iloc[day_idx].values
 
             self._solve_milp(prices, occ1, occ2)
 
-        # ── Return pre-planned action for this hour ───────────────────────────
+        p1 = self.planned_p1[t]
+        p2 = self.planned_p2[t]
+        v  = self.planned_v[t]
+
+        # ── Apply overrule controllers (same logic as Environment.py) ─────────
+        params  = self.params
+        T1      = state["T1"]
+        T2      = state["T2"]
+        H       = state["H"]
+        P_max   = params["heating_max_power"]
+        T_low   = params["temp_min_comfort_threshold"]
+        T_OK    = params["temp_OK_threshold"]
+        T_high  = params["temp_max_comfort_threshold"]
+        H_high  = params["humidity_threshold"]
+        U_vent  = params["vent_min_up_time"]
+        vent_counter    = state["vent_counter"]
+        low_override_r1 = state["low_override_r1"]
+        low_override_r2 = state["low_override_r2"]
+
+        if T1 < T_low:
+            low_override_r1 = 1
+        if low_override_r1 == 1:
+            if T1 >= T_OK:
+                low_override_r1 = 0
+            else:
+                p1 = P_max
+        if T1 > T_high:
+            p1 = 0
+
+        if T2 < T_low:
+            low_override_r2 = 1
+        if low_override_r2 == 1:
+            if T2 >= T_OK:
+                low_override_r2 = 0
+            else:
+                p2 = P_max
+        if T2 > T_high:
+            p2 = 0
+
+        if H > H_high:
+            v = 1
+        if 1 <= vent_counter <= U_vent - 1:
+            v = 1
+
         return {
-            "HeatPowerRoom1": self.planned_p1[t],
-            "HeatPowerRoom2": self.planned_p2[t],
-            "VentilationON":  self.planned_v[t]
+            "HeatPowerRoom1": p1,
+            "HeatPowerRoom2": p2,
+            "VentilationON":  v
         }
 
 
@@ -90,9 +136,9 @@ class HindsightPolicy:
         zeta_occ  = params['heat_occupancy_coeff']
         eta_occ   = params['humidity_occupancy_coeff']
         eta_vent  = params['humidity_vent_coeff']
-        T_low     = params['temp_min_comfort_threshold']
-        T_ok      = params['temp_OK_threshold']
-        T_high    = params['temp_max_comfort_threshold']
+        T_low     = params['temp_min_comfort_threshold'] + 0.0001  # buffer against solver tolerance
+        T_ok      = params['temp_OK_threshold'] + 0.0001
+        T_high    = params['temp_max_comfort_threshold']  
         H_high    = params['humidity_threshold']
         U_vent    = params['vent_min_up_time']
         T_out     = params['outdoor_temperature']
@@ -111,7 +157,7 @@ class HindsightPolicy:
         model.R      = Set(initialize=[1, 2])
         model.p      = Var(model.R, model.T, domain=NonNegativeReals, bounds=(0, P_max))
         model.Temp   = Var(model.R, model.T, domain=Reals)
-        model.H      = Var(model.T, domain=Reals)
+        model.H      = Var(model.T, domain=NonNegativeReals)
         model.v      = Var(model.T, domain=Binary)
         model.s      = Var(model.T, domain=Binary)
         model.y_low  = Var(model.R, model.T, domain=Binary)

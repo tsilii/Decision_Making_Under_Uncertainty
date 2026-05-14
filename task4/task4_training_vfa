@@ -20,14 +20,17 @@ Output:
 import sys
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import Ridge
 
 ROOT      = r'c:\Users\rodri\Decision_Making_Under_Uncertainty'
 DATA_PATH = ROOT + r'\given'
+OUT_OF_SAMPLE_PATH = ROOT + r'\out_of_sample'
 sys.path.append(DATA_PATH)
 sys.path.append(ROOT)
+sys.path.append(OUT_OF_SAMPLE_PATH)
 
 import v2_SystemCharacteristics as sc
-from milp_solver import solve_milp_with_results
+from task4.milp_solver import solve_milp_with_results
 
 # =============================================================================
 # 1. System parameters
@@ -38,9 +41,9 @@ T_TOTAL = int(params['num_timeslots'])  # timeslots per day
 # =============================================================================
 # 2. Load training data
 # =============================================================================
-price_data = pd.read_csv(f'{ROOT}/OutOfSamplePriceData.csv')
-occ_room1  = pd.read_csv(f'{ROOT}/OutOfSampleOccupancyRoom1.csv')
-occ_room2  = pd.read_csv(f'{ROOT}/OutOfSampleOccupancyRoom2.csv')
+price_data = pd.read_csv(f'{OUT_OF_SAMPLE_PATH}/OutOfSamplePriceData3.0.csv')
+occ_room1  = pd.read_csv(f'{OUT_OF_SAMPLE_PATH}/OutOfSampleOccupancyRoom1.3.csv')
+occ_room2  = pd.read_csv(f'{OUT_OF_SAMPLE_PATH}/OutOfSampleOccupancyRoom2.3.csv')
 
 print(f"Data loaded — Prices: {price_data.shape}, Occ1: {occ_room1.shape}, Occ2: {occ_room2.shape}")
 
@@ -120,6 +123,13 @@ eta = np.zeros((T_TOTAL, N_FEATURES))  # shape (T, 7)
 for t in range(T_TOTAL):
     eta[t], _, _, _ = np.linalg.lstsq(State[t], V_star[:, t], rcond=None)
     print(f"t={t}: eta = {eta[t].round(3)}")
+
+#ridge = Ridge(alpha=1.0, fit_intercept=False)
+
+#for t in range(T_TOTAL):
+  #  ridge.fit(State[t], V_star[:, t])
+ #   eta[t] = ridge.coef_
+   # print(f"t={t}: eta = {eta[t].round(3)}")
 
 # =============================================================================
 # 7. Save weights

@@ -9,7 +9,7 @@
 
 import os
 import sys
-
+import pandas as pd
 import numpy as np
 from pyomo.environ import (
     Binary,
@@ -21,6 +21,7 @@ from pyomo.environ import (
     minimize,
     value,
 )
+
 
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))

@@ -38,9 +38,9 @@ params = sc.get_fixed_data()
 eta = np.load('task4/eta.npy')
 
 # --- Out-of-sample data ------------------------------------------------------
-price_data = pd.read_csv(f'{ROOT}/OutOfSamplePriceData.csv')
-occ_room1  = pd.read_csv(f'{ROOT}/OutOfSampleOccupancyRoom1.csv')
-occ_room2  = pd.read_csv(f'{ROOT}/OutOfSampleOccupancyRoom2.csv')
+price_data = pd.read_csv(f'{DATA_PATH}/PriceData.csv')
+occ_room1  = pd.read_csv(f'{DATA_PATH}/OccupancyRoom1.csv')
+occ_room2  = pd.read_csv(f'{DATA_PATH}/OccupancyRoom2.csv')
 
 N_DAYS     = len(price_data)
 N_FEATURES = 7

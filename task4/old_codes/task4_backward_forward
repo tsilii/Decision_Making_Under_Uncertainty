@@ -1,0 +1,339 @@
+"""
+Task 4 - ADP Training Script
+=============================
+Trains the Value Function Approximation (VFA) weights for the ADP policy.
+
+Strategy (Optimistic in Hindsight, K=1):
+  - Solves the MILP (Task 1) for each training day to get hindsight-optimal trajectories
+  - Extracts the optimal state sequences and remaining costs (V*)
+  - Builds a feature vector phi(s) for each state
+  - Fits one OLS regression per timeslot: eta_t = argmin sum_n (eta_t' * phi(s_{n,t}) - V*(s_{n,t}))^2
+  - Saves the learned weights to 'eta.npy' for use in the ADP policy
+
+Usage:
+    python task4_training_vfa
+
+Output:
+    task4/eta.npy  -- array of shape (T_TOTAL, N_FEATURES) with the learned VFA weights
+"""
+
+import sys
+import os
+import numpy as np
+import pandas as pd
+
+ROOT      = r'c:\Users\rodri\Decision_Making_Under_Uncertainty'
+DATA_PATH = ROOT + r'\given'
+sys.path.append(DATA_PATH)
+sys.path.append(ROOT)
+
+import v2_SystemCharacteristics as sc
+from task4.old_codes.milp_solver import solve_milp_with_results
+
+# Add task4 directory to path so we can import ADPPolicy
+TASK4_DIR = os.path.join(ROOT, 'task4')
+sys.path.append(TASK4_DIR)
+from task6.ADPPolicy import ADPPolicy
+
+
+# =============================================================================
+# 1. System parameters
+# =============================================================================
+params  = sc.get_fixed_data()
+T_TOTAL = int(params['num_timeslots'])  # timeslots per day
+
+# Dynamics coefficients (same as HindsightPolicy._solve_milp)
+P_VENT    = float(params['ventilation_power'])
+ZETA_EXCH = float(params['heat_exchange_coeff'])
+ZETA_LOSS = float(params['thermal_loss_coeff'])
+ZETA_CONV = float(params['heating_efficiency_coeff'])
+ZETA_COOL = float(params['heat_vent_coeff'])
+ZETA_OCC  = float(params['heat_occupancy_coeff'])
+ETA_OCC   = float(params['humidity_occupancy_coeff'])
+ETA_VENT  = float(params['humidity_vent_coeff'])
+T_OUT     = list(params['outdoor_temperature'])
+
+# Comfort thresholds (for override logic in rollout)
+T_LOW  = float(params['temp_min_comfort_threshold'])
+T_OK   = float(params['temp_OK_threshold'])
+T_HIGH = float(params['temp_max_comfort_threshold'])
+H_HIGH = float(params['humidity_threshold'])
+U_VENT = int(params['vent_min_up_time'])
+P_MAX  = float(params['heating_max_power'])
+
+# =============================================================================
+# 2. Load training data
+# =============================================================================
+price_data = pd.read_csv(f'{DATA_PATH}/PriceData.csv')
+occ_room1  = pd.read_csv(f'{DATA_PATH}/OccupancyRoom1.csv')
+occ_room2  = pd.read_csv(f'{DATA_PATH}/OccupancyRoom2.csv')
+
+print(f"Data loaded — Prices: {price_data.shape}, Occ1: {occ_room1.shape}, Occ2: {occ_room2.shape}")
+
+# =============================================================================
+# 3. Collect hindsight-optimal trajectories via MILP
+# =============================================================================
+N_DAYS       = len(price_data)
+trajectories = []
+
+for day in range(N_DAYS):
+    prices = price_data.iloc[day, :].values
+    occ1   = occ_room1.iloc[day, :].values
+    occ2   = occ_room2.iloc[day, :].values
+
+    traj = solve_milp_with_results(prices, occ1, occ2, params)
+    trajectories.append(traj)
+
+print(f"\nTrajectories collected: {len(trajectories)} days x {T_TOTAL} timeslots")
+
+# =============================================================================
+# 4. Feature vector phi(s)
+#    s = (T_r1, T_r2, H, price, occ1, occ2)
+#    Bias term (1.0) included for affine approximation.
+# =============================================================================
+N_FEATURES = 7
+
+def phi(T_r1, T_r2, H, price, occ1, occ2):
+    return np.array([1.0, T_r1, T_r2, H, price, occ1, occ2])
+
+# =============================================================================
+# 5. Transition dynamics
+#    Exactly the same equations as HindsightPolicy._solve_milp / temp_dynamics.
+#    T_r1[t] = T_r1[t-1] + zeta_exch*(T_r2-T_r1) - zeta_loss*(T_r1-T_out)
+#              + zeta_conv*p1 - zeta_cool*v + zeta_occ*occ1
+# =============================================================================
+def step_dynamics(T1, T2, H, p1, p2, v, occ1, occ2, t):
+    """
+    Apply one-step transition. Returns (T1_next, T2_next, H_next).
+    t is the current timeslot index (used to index T_OUT).
+    """
+    T1_next = (T1
+               + ZETA_EXCH * (T2 - T1)
+               - ZETA_LOSS * (T1 - T_OUT[t])
+               + ZETA_CONV * p1
+               - ZETA_COOL * v
+               + ZETA_OCC  * occ1)
+
+    T2_next = (T2
+               + ZETA_EXCH * (T1 - T2)
+               - ZETA_LOSS * (T2 - T_OUT[t])
+               + ZETA_CONV * p2
+               - ZETA_COOL * v
+               + ZETA_OCC  * occ2)
+
+    H_next = H + ETA_OCC * (occ1 + occ2) - ETA_VENT * v
+
+    return T1_next, T2_next, H_next
+
+# =============================================================================
+# 6. Build V* targets and feature matrices (Optimistic in Hindsight)
+# =============================================================================
+N      = len(trajectories)
+V_star = np.zeros((N, T_TOTAL))             # OLS targets
+State  = np.zeros((T_TOTAL, N, N_FEATURES)) # OLS features
+
+for n, traj in enumerate(trajectories):
+    prices = np.array(traj['price'])
+    h_r1   = np.array(traj['h_r1'])
+    h_r2   = np.array(traj['h_r2'])
+    v      = np.array(traj['v'])
+    T_r1_s = np.array(traj['Temp_r1'])
+    T_r2_s = np.array(traj['Temp_r2'])
+    H_s    = np.array(traj['Hum'])
+    occ1_s = np.array(traj['Occ_r1'])
+    occ2_s = np.array(traj['Occ_r2'])
+
+    cost_per_hour = prices * (h_r1 + h_r2 + P_VENT * v)
+
+    for t in range(T_TOTAL):
+        # V*(s_t) = negative of remaining cost after timeslot t
+        V_star[n, t] = -np.sum(cost_per_hour[t+1:])
+
+        # Features: next endogenous state + current exogenous inputs
+        if t < T_TOTAL - 1:
+            State[t, n] = phi(T_r1_s[t+1], T_r2_s[t+1], H_s[t+1],
+                              prices[t], occ1_s[t], occ2_s[t])
+        else:
+            # Last step: no next state, use current
+            State[t, n] = phi(T_r1_s[t], T_r2_s[t], H_s[t],
+                              prices[t], occ1_s[t], occ2_s[t])
+
+# =============================================================================
+# 7. OLS regression per timeslot → initial eta
+# =============================================================================
+eta = np.zeros((T_TOTAL, N_FEATURES))
+
+for t in range(T_TOTAL):
+    eta[t], _, _, _ = np.linalg.lstsq(State[t], V_star[:, t], rcond=None)
+    print(f"t={t}: eta = {eta[t].round(3)}")
+
+# =============================================================================
+# 8. In-sample R² diagnostic (before forward_backward)
+# =============================================================================
+print("\n--- In-sample R² (Optimistic in Hindsight) ---")
+for t in range(T_TOTAL):
+    pred   = State[t] @ eta[t]
+    ss_res = np.sum((V_star[:, t] - pred) ** 2)
+    ss_tot = np.sum((V_star[:, t] - V_star[:, t].mean()) ** 2)
+    r2     = 1 - ss_res / ss_tot if ss_tot > 0 else 1.0
+    print(f"t={t}: R² = {r2:.4f}")
+
+# =============================================================================
+# 9. Rollout helper
+#    Simulates one day using ADPPolicy.solve_adp_step with current eta.
+#    Returns list of (phi_t, cost_t) tuples, one per timeslot.
+# =============================================================================
+def rollout_day(state0, prices, occ1, occ2, policy):
+    """
+    Simulates one full day using the given policy.
+
+    Parameters
+    ----------
+    state0 : dict with keys T1, T2, H, vent_counter, low_r1, low_r2
+    prices, occ1, occ2 : arrays of length T_TOTAL
+    policy : ADPPolicy instance
+
+    Returns
+    -------
+    list of (phi_t, cost_t) — one entry per timeslot
+    """
+    T1          = state0["T1"]
+    T2          = state0["T2"]
+    H           = state0["H"]
+    vent_counter = state0["vent_counter"]
+    low_r1      = state0["low_r1"]
+    low_r2      = state0["low_r2"]
+
+    traj = []
+
+    for t in range(T_TOTAL):
+        phi_t = phi(T1, T2, H, prices[t], occ1[t], occ2[t])
+
+        # Use ADPPolicy's one-step solver with current eta already loaded
+        p1, p2, v = policy.solve_adp_step(
+            t=t,
+            T_r1=T1,
+            T_r2=T2,
+            H=H,
+            price=prices[t],
+            occ1=occ1[t],
+            occ2=occ2[t],
+            vent_counter=vent_counter,
+            low_r1=low_r1,
+            low_r2=low_r2,
+        )
+
+        cost = prices[t] * (p1 + p2 + P_VENT * v)
+
+        # Apply dynamics — same equations as HindsightPolicy._solve_milp
+        T1, T2, H = step_dynamics(T1, T2, H, p1, p2, v, occ1[t], occ2[t], t)
+
+        traj.append((phi_t, cost))
+
+    return traj
+
+# =============================================================================
+# 10. Forward-Backward ADP iteration (Bellman targets)
+#     Refines eta using on-policy rollouts instead of hindsight trajectories.
+#     Each iteration:
+#       - Rolls out every training day with current policy (forward pass)
+#       - Fits Bellman targets: target_t = -cost_t + eta[t+1] @ phi_{t+1}
+#       - Updates eta via OLS (backward pass)
+# =============================================================================
+def forward_backward(eta, price_data, occ_room1, occ_room2, n_iters=3):
+    """
+    Parameters
+    ----------
+    eta         : np.ndarray (T_TOTAL, N_FEATURES) — initial weights
+    price_data  : pd.DataFrame, rows = days, cols = timeslots
+    occ_room1   : pd.DataFrame, same shape
+    occ_room2   : pd.DataFrame, same shape
+    n_iters     : number of forward-backward iterations
+
+    Returns
+    -------
+    eta : np.ndarray (T_TOTAL, N_FEATURES) — refined weights
+    """
+    # Policy object whose eta we update in place each iteration
+    policy = ADPPolicy()
+
+    state0 = {
+        "T1":           float(params['T1']),
+        "T2":           float(params['T2']),
+        "H":            float(params['H']),
+        "vent_counter": 0,
+        "low_r1":       0,
+        "low_r2":       0,
+    }
+
+    for it in range(n_iters):
+        print(f"\n--- Forward-Backward iteration {it+1}/{n_iters} ---")
+
+        # Update policy weights so solve_adp_step uses latest eta
+        policy.eta = eta
+
+        X = [[] for _ in range(T_TOTAL)]  # feature matrices per timeslot
+        Y = [[] for _ in range(T_TOTAL)]  # Bellman targets per timeslot
+
+        for day_idx in range(len(price_data)):
+            prices = price_data.iloc[day_idx].values
+            occ1   = occ_room1.iloc[day_idx].values
+            occ2   = occ_room2.iloc[day_idx].values
+
+            traj = rollout_day(state0, prices, occ1, occ2, policy)
+
+            # Compute Bellman targets along the rollout
+            for t in range(T_TOTAL):
+                phi_t, cost_t = traj[t]
+
+                if t < T_TOTAL - 1:
+                    phi_next, _ = traj[t + 1]
+                    # V(s_t) ≈ -cost_t + V(s_{t+1})  (sign: V is negative cost)
+                    target = -cost_t + eta[t + 1] @ phi_next
+                else:
+                    # Terminal: no future value
+                    target = -cost_t
+
+                X[t].append(phi_t)
+                Y[t].append(target)
+
+        # OLS update per timeslot
+        # t = T-1: V*(s_T) = 0 by definition — no future reward, fix eta to zero
+        eta_new = np.zeros_like(eta)
+        for t in range(T_TOTAL - 1):
+            X_t = np.array(X[t])
+            Y_t = np.array(Y[t])
+            eta_new[t], _, _, _ = np.linalg.lstsq(X_t, Y_t, rcond=None)
+        # eta_new[T_TOTAL - 1] stays zero (terminal state has no future value)
+
+        eta = eta_new
+
+        # Quick R² diagnostic (t=T-1 always 1.0: no future reward, eta fixed to zero)
+        for t in range(T_TOTAL):
+            if t == T_TOTAL - 1:
+                print(f"  t={t}: R² = 1.0000  eta = {eta[t].round(3)}  [terminal — eta fixed to zero]")
+                continue
+            pred   = np.array(X[t]) @ eta[t]
+            Y_t    = np.array(Y[t])
+            ss_res = np.sum((Y_t - pred) ** 2)
+            ss_tot = np.sum((Y_t - Y_t.mean()) ** 2)
+            r2     = 1 - ss_res / ss_tot if ss_tot > 0 else 1.0
+            print(f"  t={t}: R² = {r2:.4f}  eta = {eta[t].round(3)}")
+
+    return eta
+
+# =============================================================================
+# 11. Run forward-backward refinement (optional — comment out to skip)
+# =============================================================================
+eta = forward_backward(eta, price_data, occ_room1, occ_room2, n_iters=3)
+
+# =============================================================================
+# 12. Save final weights
+# =============================================================================
+output_path = os.path.join(ROOT, 'task4', 'eta_bf.npy')
+np.save(output_path, eta)
+print(f"\nWeights saved to '{output_path}' — shape: {eta.shape}  "
+      f"({T_TOTAL} timeslots x {N_FEATURES} features: [1, T1, T2, H, price, occ1, occ2])")
+
+
+
