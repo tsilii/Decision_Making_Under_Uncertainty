@@ -11,12 +11,22 @@ import sys
 import os
 
 # ── paths ─────────────────────────────────────────────────────────────────────
-BASE_DIR  = "/Users/manostsili/Desktop/dtu/courses/decision making under uncertainty /assignment_DC"
-TASK6_DIR = os.path.join(BASE_DIR, "task6")
-TASK1_DIR = os.path.join(BASE_DIR, "Task1")
+#BASE_DIR  = "/Users/manostsili/Desktop/dtu/courses/decision making under uncertainty /assignment_DC"
+ROOT  = r'c:\Users\rodri\Decision_Making_Under_Uncertainty'
+DATA_PATH = ROOT + r'\given'
+TASK1_DIR = ROOT + r'\Task1'
+TASK6_DIR = ROOT + r'\task6'
+TASK4_DIR = ROOT + r'\task4'
+sys.path.append(DATA_PATH)
+sys.path.append(ROOT)
+sys.path.append(TASK1_DIR)
+sys.path.append(TASK6_DIR)
+sys.path.append(TASK4_DIR)
+#TASK6_DIR = os.path.join(ROOT, "task6")
+#TASK1_DIR = os.path.join(ROOT, "Task1")
 
-sys.path.insert(0, TASK6_DIR)   # Environment, DummyPolicy
-sys.path.insert(0, TASK1_DIR)   # HindsightPolicy
+#sys.path.insert(0, TASK6_DIR)   # Environment, DummyPolicy
+#sys.path.insert(0, TASK1_DIR)   # HindsightPolicy
 # sys.path.insert(0, os.path.join(BASE_DIR, "task3"))  # SPPolicy etc.
 
 # ── import environment ────────────────────────────────────────────────────────
@@ -26,10 +36,10 @@ from Environment import run_simulation
 # ── import policies ───────────────────────────────────────────────────────────
 from DummyPolicy     import DummyPolicy
 from HindsightPolicy import HindsightPolicy
-from SPPolicy import SPPolicy
-# from EVPolicy        import EVPolicy
+#from SPPolicy import SPPolicy
+from DLPolicy_Rodrigo        import DLPolicy
 # from TwoStagePolicy  import TwoStagePolicy
-# from ADPPolicy       import ADPPolicy
+from ADPPolicy       import ADPPolicy
 # from HybridPolicy    import HybridPolicy
 
 
@@ -47,19 +57,19 @@ np.random.seed(20)
 hindsight_costs = run_simulation(HindsightPolicy(), num_experiments=100)
 print(f"Hindsight     -> avg cost: {np.mean(hindsight_costs):.2f}")
 
-np.random.seed(20)
-dl_costs = run_simulation(DLPolicy(), num_experiments=100)
+#np.random.seed(20)
+#dl_costs = run_simulation(DLPolicy(), num_experiments=100)
+#print(f"DL Policy     -> avg cost: {np.mean(dl_costs):.2f}")
+
+#np.random.seed(20)
+#sp2_costs = run_simulation(TwoStageSPPolicy(), num_experiments=100)
+#print(f"SP2 Policy     -> avg cost: {np.mean(sp2_costs):.2f}")
+
+#sp_costs = run_simulation(SPPolicy(), num_experiments=100, verbose=True)
+#print(f"SP Policy     -> avg cost: {np.mean(sp_costs):.2f}")
+
+dl_costs       = run_simulation(DLPolicy(),       num_experiments=100)
 print(f"DL Policy     -> avg cost: {np.mean(dl_costs):.2f}")
-
-np.random.seed(20)
-sp2_costs = run_simulation(TwoStageSPPolicy(), num_experiments=100)
-print(f"SP2 Policy     -> avg cost: {np.mean(sp2_costs):.2f}")
-
-sp_costs = run_simulation(SPPolicy(), num_experiments=100, verbose=True)
-print(f"SP Policy     -> avg cost: {np.mean(sp_costs):.2f}")
-
-#ev_costs       = run_simulation(EVPolicy(),       num_experiments=2, verbose=True)
-#print(f"EV Policy     -> avg cost: {np.mean(ev_costs):.2f}")
 
 # twostage_costs = run_simulation(TwoStagePolicy(), num_experiments=100)
 # print(f"Two-Stage     -> avg cost: {np.mean(twostage_costs):.2f}")
@@ -78,8 +88,8 @@ print(f"ADP Policy    -> avg cost: {np.mean(adp_costs):.2f}")
 results = {
     "Dummy":      dummy_costs,
     "Hindsight":  hindsight_costs,
-    "SP":         sp_costs,
-    # "EV":         ev_costs,
+    #"SP":         sp_costs,
+    "DL":         dl_costs,
     # "Two-Stage":  twostage_costs,
     "ADP":        adp_costs,
     # "Hybrid":     hybrid_costs,
