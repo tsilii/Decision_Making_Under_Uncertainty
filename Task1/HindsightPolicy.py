@@ -38,9 +38,9 @@ class HindsightPolicy:
 
     def __init__(self):
         """Load CSV data once at initialization."""
-        self.price_df = pd.read_csv(os.path.join(GIVEN_DIR, "PriceData.csv"))
-        self.occ1_df  = pd.read_csv(os.path.join(GIVEN_DIR, "OccupancyRoom1.csv"))
-        self.occ2_df  = pd.read_csv(os.path.join(GIVEN_DIR, "OccupancyRoom2.csv"))
+        self.price_df = pd.read_csv(os.path.join(DATA_DIR, "v2_PriceData.csv"))
+        self.occ1_df  = pd.read_csv(os.path.join(DATA_DIR, "OccupancyRoom1.csv"))
+        self.occ2_df  = pd.read_csv(os.path.join(DATA_DIR, "OccupancyRoom2.csv"))
         self.params   = SC.get_fixed_data()
 
         self.planned_p1  = None

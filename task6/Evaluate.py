@@ -13,11 +13,13 @@ import os
 # ── paths ─────────────────────────────────────────────────────────────────────
 BASE_DIR  = "/Users/manostsili/Desktop/dtu/courses/decision making under uncertainty /assignment_DC"
 TASK1_DIR = os.path.join(BASE_DIR, "Task1")
+TASK3_DIR = os.path.join(BASE_DIR, "Task3")
 TASK5_DIR = os.path.join(BASE_DIR, "Task5")
 TASK6_DIR = os.path.join(BASE_DIR, "task6")
 GIVEN_DIR = os.path.join(BASE_DIR, "given")
 
 sys.path.insert(0, TASK1_DIR)
+sys.path.insert(0, TASK3_DIR)
 sys.path.insert(0, TASK5_DIR)
 sys.path.insert(0, TASK6_DIR)
 sys.path.insert(0, GIVEN_DIR)

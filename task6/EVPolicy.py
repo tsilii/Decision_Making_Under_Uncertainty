@@ -1,28 +1,30 @@
 # -*- coding: utf-8 -*-
 """
-SPPolicy.py (Task 3)
+EVPolicy.py (Task 6)
 =====================
-Multi-stage Stochastic Programming policy.
+Expected Value Policy (Deterministic Lookahead).
 
 HOW IT WORKS:
   At each hour t:
     1. Observe current state
-    2. Generate N_init=100 scenarios for remaining hours using
+    2. Generate N_init=300 scenarios for remaining hours using
        price_model() and next_occupancy_levels()
-    3. Reduce to N_reduced=30 scenarios using Fast Forward Selection
-    4. Solve a multi-stage stochastic MILP over all scenarios
-       - Here-and-now variables (t=current): SAME across all scenarios
-       - Wait-and-see variables (t>current): DIFFERENT per scenario
-       - Objective: minimize EXPECTED cost = (1/S) * sum of scenario costs
+    3. Average all scenarios into ONE single expected trajectory
+       - prices[t] = mean of all scenario prices at t
+       - occ1[t]   = mean of all scenario occupancies at t
+       - occ2[t]   = mean of all scenario occupancies at t
+    4. Solve a deterministic MILP with the single average scenario
+       - No uncertainty considered → single scenario with probability 1
+       - Much faster to solve than full SP
     5. Extract and return ONLY the here-and-now action
     6. Discard the rest of the plan
     7. Repeat next hour with new observed state
 
 KEY DESIGN CHOICES:
-  - Lookahead horizon : full remaining horizon (T - current_time)
-  - Initial scenarios : 100
-  - Reduced scenarios : 30
-  - Reduction method  : Fast Forward Selection
+  - Lookahead horizon : min(remaining, 5) hours
+  - Initial scenarios : 300 (for averaging)
+  - Reduced scenarios : 1 (the average of all 300)
+  - Reduction method  : Averaging (Expected Value)
 """
 
 import numpy as np
@@ -31,8 +33,7 @@ import os
 from pyomo.environ import *
 
 # ── paths ─────────────────────────────────────────────────────────────────────
-# BASE_DIR  = "/Users/manostsili/Desktop/dtu/courses/decision making under uncertainty /assignment_DC"
-BASE_DIR  = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+BASE_DIR  = "/Users/manostsili/Desktop/dtu/courses/decision making under uncertainty /assignment_DC"
 GIVEN_DIR = os.path.join(BASE_DIR, "given")
 sys.path.insert(0, GIVEN_DIR)
 
@@ -464,23 +465,17 @@ def solve_stochastic_milp(state, scenarios, probabilities, params):
 # SP POLICY CLASS
 # =============================================================================
 
-class SPPolicy:
+class EVPolicy:
     """
-    Multi-stage Stochastic Programming policy.
+    Expected Value Policy (Deterministic Lookahead).
     Implements the select_action(state) interface required by the environment.
     """
 
-    def __init__(self, N_init=300, N_reduced=100):
+    def __init__(self, N_init=300):
    
-        """
-        Parameters
-        ----------
-        N_init    : number of scenarios to generate before reduction
-        N_reduced : number of scenarios to keep after reduction
-        """
-        self.N_init    = N_init
-        self.N_reduced = N_reduced
-        self.params    = SC.get_fixed_data()
+        
+        self.N_init  = N_init   # N_reduced not needed anymore
+        self.params  = SC.get_fixed_data()
 
     def select_action(self, state):
         """
@@ -510,14 +505,18 @@ class SPPolicy:
         # Step 1: Generate scenarios
         scenarios = generate_scenarios(state, horizon, N_init=self.N_init)
 
-        # Step 2: Reduce scenarios
-        reduced_scenarios, probabilities = fast_forward_selection(
-            scenarios, N_reduced=self.N_reduced
-        )
+        # Step 2: Average all scenarios into ONE single scenario
+        avg_prices = np.mean([s['prices'] for s in scenarios], axis=0)
+        avg_occ1   = np.mean([s['occ1']   for s in scenarios], axis=0)
+        avg_occ2   = np.mean([s['occ2']   for s in scenarios], axis=0)
 
-        # Step 3: Solve stochastic MILP
+        avg_scenario  = [{'prices': avg_prices, 'occ1': avg_occ1, 'occ2': avg_occ2}]
+        probabilities = [1.0]   # only one scenario with probability 1
+
+
+        # Step 3: Solve deterministic MILP with single average scenario
         p1, p2, v = solve_stochastic_milp(
-            state, reduced_scenarios, probabilities, self.params
+            state, avg_scenario, probabilities, self.params
         )
 
         # Step 4: Return here-and-now action

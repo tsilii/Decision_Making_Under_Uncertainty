@@ -17,8 +17,7 @@ import sys
 import os
 
 # ── paths ─────────────────────────────────────────────────────────────────────
-# BASE_DIR    = "/Users/manostsili/Desktop/dtu/courses/decision making under uncertainty /assignment_DC"
-BASE_DIR    = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+BASE_DIR    = "/Users/manostsili/Desktop/dtu/courses/decision making under uncertainty /assignment_DC"
 GIVEN_DIR   = os.path.join(BASE_DIR, "given")    # professor's files
 DATA_DIR    = os.path.join(BASE_DIR, "data")     # CSV files
 
@@ -67,15 +66,26 @@ def apply_overrule_controllers(state, action, params):
     v  = action["VentilationON"]
 
     # ── Room 1 low-temperature override ──────────────────────────────────────
+    if T1 < T_low:
+        low_override_r1 = 1
     if low_override_r1 == 1:
-        p1 = P_max
+        if T1 >= T_OK:
+            low_override_r1 = 0
+        else:
+            p1 = P_max
+
     # ── Room 1 high-temperature override ─────────────────────────────────────
     if T1 > T_high:
         p1 = 0
 
     # ── Room 2 low-temperature override ──────────────────────────────────────
+    if T2 < T_low:
+        low_override_r2 = 1
     if low_override_r2 == 1:
-        p2 = P_max
+        if T2 >= T_OK:
+            low_override_r2 = 0
+        else:
+            p2 = P_max
 
     # ── Room 2 high-temperature override ─────────────────────────────────────
     if T2 > T_high:
@@ -95,7 +105,8 @@ def apply_overrule_controllers(state, action, params):
         "VentilationON":  v
     }
 
-    return effective_action
+    return effective_action, low_override_r1, low_override_r2
+
 
 def compute_next_state(state, effective_action, next_occ1, next_occ2,
                        next_price, current_price, t, params):
@@ -136,14 +147,14 @@ def compute_next_state(state, effective_action, next_occ1, next_occ2,
     # ── Temperature updates ───────────────────────────────────────────────────
     T1_next = (T1
                + zeta_exch * (T2 - T1)
-               + zeta_loss * (T_out - T1)
+               - zeta_loss * (T1 - T_out)
                + zeta_conv * p1
                - zeta_cool * v
                + zeta_occ  * Occ1)
 
     T2_next = (T2
                + zeta_exch * (T1 - T2)
-               + zeta_loss * (T_out - T2)
+               - zeta_loss * (T2 - T_out)
                + zeta_conv * p2
                - zeta_cool * v
                + zeta_occ  * Occ2)
@@ -226,18 +237,18 @@ def run_simulation(policy, num_experiments=100, verbose=False):
     T        = params["num_timeslots"]
 
     # ── Load CSV data ─────────────────────────────────────────────────────────
-    price_df = pd.read_csv(os.path.join(GIVEN_DIR, "PriceData.csv"))
-    occ1_df  = pd.read_csv(os.path.join(GIVEN_DIR, "OccupancyRoom1.csv"))
-    occ2_df  = pd.read_csv(os.path.join(GIVEN_DIR, "OccupancyRoom2.csv"))
+    price_df = pd.read_csv(os.path.join(DATA_DIR, "v2_PriceData.csv"))
+    occ1_df  = pd.read_csv(os.path.join(DATA_DIR, "OccupancyRoom1.csv"))
+    occ2_df  = pd.read_csv(os.path.join(DATA_DIR, "OccupancyRoom2.csv"))
 
     daily_costs = []
 
     for day in range(num_experiments):
 
         # ── Extract this day's sequences ──────────────────────────────────────
-        price_row  = price_df.iloc[day].values
+        price_row  = price_df.iloc[day].values   # shape (11,)
         price_prev = price_row[0]
-        prices     = price_row[:T]
+        prices     = price_row[1:]               # shape (10,)
 
         occ1_row = occ1_df.iloc[day].values      # shape (10,)
         occ2_row = occ2_df.iloc[day].values      # shape (10,)
@@ -265,8 +276,11 @@ def run_simulation(policy, num_experiments=100, verbose=False):
             action = check_and_sanitize_action(policy, state, PowerMax)
 
             # Step 2: apply overrule controllers
-            effective_action = apply_overrule_controllers(state, action, params)
-
+            effective_action, low_r1, low_r2 = apply_overrule_controllers(
+                state, action, params
+            )
+            state["low_override_r1"] = low_r1
+            state["low_override_r2"] = low_r2
 
             # Step 3: compute cost on effective action
             current_price = prices[t]
