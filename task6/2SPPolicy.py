@@ -30,6 +30,7 @@ import numpy as np
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from pyomo.environ import *
+from pyomo.opt import TerminationCondition
 import sys, os
 
 import v2_SystemCharacteristics as SC
@@ -84,7 +85,7 @@ def reduce_scenarios(scenarios_raw, N_reduced=100):
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(scenarios_raw)
 
-    km = KMeans(n_clusters=N_reduced, random_state=42, n_init=10)
+    km = KMeans(n_clusters=N_reduced, random_state=42, n_init=3)
     km.fit(X_scaled)
 
     # Centroids back in original units
@@ -452,9 +453,12 @@ def solve_2stage_milp(state, centroids, probabilities, params):
     # SOLVE
     # ─────────────────────────────────────────────────────────────────────────
     solver = SolverFactory('gurobi')
-    solver.options['TimeLimit'] = 10
+    solver.options['TimeLimit'] = 8
     solver.options['MIPGap']    = 0.01
     result = solver.solve(m, tee=False)
+
+    if result.solver.termination_condition == TerminationCondition.maxTimeLimit:
+        print(f"[2SPPolicy] WARNING: Gurobi hit 8s TimeLimit — returning best incumbent found")
 
     # ─────────────────────────────────────────────────────────────────────────
     # EXTRACT HERE-AND-NOW ACTION

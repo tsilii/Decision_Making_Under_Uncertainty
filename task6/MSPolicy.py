@@ -20,6 +20,7 @@ import numpy as np
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 from pyomo.environ import *
+from pyomo.opt import TerminationCondition
 import sys, os
 
 import v2_SystemCharacteristics as SC
@@ -365,10 +366,14 @@ def solve_mssp(state, nodes, t_now, params):
     m.c_hum = Constraint(non_root_ids, rule=c_hum)
 
     # ── Solve ─────────────────────────────────────────────────────────────────
+    # TimeLimit=12 leaves ~3s buffer vs the environment's 15s wall-clock cutoff
     solver = SolverFactory('gurobi')
-    solver.options['TimeLimit'] = 30
+    solver.options['TimeLimit'] = 12
     solver.options['MIPGap']    = 0.01
-    solver.solve(m, tee=False)
+    result = solver.solve(m, tee=False)
+
+    if result.solver.termination_condition == TerminationCondition.maxTimeLimit:
+        print(f"[MSPolicy] WARNING: Gurobi hit 12s TimeLimit — returning best incumbent found")
 
     try:
         return float(value(m.p1[0])), float(value(m.p2[0])), int(round(value(m.v[0])))

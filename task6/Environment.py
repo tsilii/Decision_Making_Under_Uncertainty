@@ -67,26 +67,15 @@ def apply_overrule_controllers(state, action, params):
     v  = action["VentilationON"]
 
     # ── Room 1 low-temperature override ──────────────────────────────────────
-    if T1 < T_low:
-        low_override_r1 = 1
     if low_override_r1 == 1:
-        if T1 >= T_OK:
-            low_override_r1 = 0
-        else:
-            p1 = P_max
-
+        p1 = P_max
     # ── Room 1 high-temperature override ─────────────────────────────────────
     if T1 > T_high:
         p1 = 0
 
     # ── Room 2 low-temperature override ──────────────────────────────────────
-    if T2 < T_low:
-        low_override_r2 = 1
     if low_override_r2 == 1:
-        if T2 >= T_OK:
-            low_override_r2 = 0
-        else:
-            p2 = P_max
+        p2 = P_max
 
     # ── Room 2 high-temperature override ─────────────────────────────────────
     if T2 > T_high:
@@ -106,8 +95,7 @@ def apply_overrule_controllers(state, action, params):
         "VentilationON":  v
     }
 
-    return effective_action, low_override_r1, low_override_r2
-
+    return effective_action
 
 def compute_next_state(state, effective_action, next_occ1, next_occ2,
                        next_price, current_price, t, params):
@@ -148,14 +136,14 @@ def compute_next_state(state, effective_action, next_occ1, next_occ2,
     # ── Temperature updates ───────────────────────────────────────────────────
     T1_next = (T1
                + zeta_exch * (T2 - T1)
-               - zeta_loss * (T1 - T_out)
+               + zeta_loss * (T_out - T1)
                + zeta_conv * p1
                - zeta_cool * v
                + zeta_occ  * Occ1)
 
     T2_next = (T2
                + zeta_exch * (T1 - T2)
-               - zeta_loss * (T2 - T_out)
+               + zeta_loss * (T_out - T2)
                + zeta_conv * p2
                - zeta_cool * v
                + zeta_occ  * Occ2)
@@ -277,11 +265,8 @@ def run_simulation(policy, num_experiments=100, verbose=False):
             action = check_and_sanitize_action(policy, state, PowerMax)
 
             # Step 2: apply overrule controllers
-            effective_action, low_r1, low_r2 = apply_overrule_controllers(
-                state, action, params
-            )
-            state["low_override_r1"] = low_r1
-            state["low_override_r2"] = low_r2
+            effective_action = apply_overrule_controllers(state, action, params)
+
 
             # Step 3: compute cost on effective action
             current_price = prices[t]
