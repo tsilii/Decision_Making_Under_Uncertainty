@@ -46,29 +46,29 @@ from HybridPolicy import HybridPolicy
 
 print("Running evaluations...")
 
-np.random.seed(20)
-dummy_costs = run_simulation(DummyPolicy(), num_experiments=100)
-print(f"Dummy Policy  -> avg cost: {np.mean(dummy_costs):.2f}")
-
-np.random.seed(20)
-hindsight_costs = run_simulation(HindsightPolicy(), num_experiments=100)
-print(f"Hindsight     -> avg cost: {np.mean(hindsight_costs):.2f}")
-
-np.random.seed(20)
-dl_costs = run_simulation(DLPolicy(), num_experiments=100)
-print(f"DL Policy     -> avg cost: {np.mean(dl_costs):.2f}")
-
-np.random.seed(20)
-sp2_costs = run_simulation(TwoStageSPPolicy(), num_experiments=100)
-print(f"2SP Policy     -> avg cost: {np.mean(sp2_costs):.2f}")
-
-np.random.seed(20)
-ms_costs = run_simulation(MultiStageSPPolicy(L=3, B=[20, 4], S_init=500), num_experiments=100)
-print(f"MS Policy      -> avg cost: {np.mean(ms_costs):.2f}")
+# np.random.seed(20)
+# dummy_costs = run_simulation(DummyPolicy(), num_experiments=100)
+# print(f"Dummy Policy  -> avg cost: {np.mean(dummy_costs):.2f}")
 
 # np.random.seed(20)
-# hybrid_costs = run_simulation(HybridPolicy(), num_experiments=100)
-# print(f"Hybrid Policy  -> avg cost: {np.mean(hybrid_costs):.2f}")
+# hindsight_costs = run_simulation(HindsightPolicy(), num_experiments=100)
+# print(f"Hindsight     -> avg cost: {np.mean(hindsight_costs):.2f}")
+
+# np.random.seed(20)
+# dl_costs = run_simulation(DLPolicy(), num_experiments=100)
+# print(f"DL Policy     -> avg cost: {np.mean(dl_costs):.2f}")
+
+# np.random.seed(20)
+# sp2_costs = run_simulation(TwoStageSPPolicy(), num_experiments=100)
+# print(f"2SP Policy     -> avg cost: {np.mean(sp2_costs):.2f}")
+
+# np.random.seed(20)
+# ms_costs = run_simulation(MultiStageSPPolicy(L=3, B=[20, 4], S_init=500), num_experiments=100)
+# print(f"MS Policy      -> avg cost: {np.mean(ms_costs):.2f}")
+
+np.random.seed(20)
+hybrid_costs = run_simulation(HybridPolicy(), num_experiments=100)
+print(f"Hybrid Policy  -> avg cost: {np.mean(hybrid_costs):.2f}")
 
 # np.random.seed(20)
 # adp_costs = run_simulation(ADPPolicy(), num_experiments=100)
@@ -80,13 +80,13 @@ print(f"MS Policy      -> avg cost: {np.mean(ms_costs):.2f}")
 # =============================================================================
 
 results = {
-    "Dummy":      dummy_costs,
-    "Hindsight":  hindsight_costs,
-    "DL":         dl_costs,
-    "2SP":        sp2_costs,
-    "MS-SP":      ms_costs,
-    # "Hybrid":   hybrid_costs,
-    # "ADP":      adp_costs,
+    # "Dummy":      dummy_costs,
+    # "Hindsight":  hindsight_costs,
+    # "DL":         dl_costs,
+    # "2SP":        sp2_costs,
+    # "MS-SP":      ms_costs,
+    "Hybrid":     hybrid_costs,
+    # "ADP":        adp_costs,
 }
 
 # =============================================================================
