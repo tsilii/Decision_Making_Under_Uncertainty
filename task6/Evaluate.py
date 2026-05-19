@@ -66,13 +66,13 @@ print(f"Hindsight     -> avg cost: {np.mean(hindsight_costs):.2f}")
 # ms_costs = run_simulation(MultiStageSPPolicy(L=3, B=[20, 4], S_init=500), num_experiments=100)
 # print(f"MS Policy      -> avg cost: {np.mean(ms_costs):.2f}")
 
-#np.random.seed(20)
-#hybrid_costs = run_simulation(HybridPolicy(), num_experiments=100)
-#print(f"Hybrid Policy  -> avg cost: {np.mean(hybrid_costs):.2f}")
-
 np.random.seed(20)
-adp_costs = run_simulation(ADPPolicy(), num_experiments=100)
-print(f"ADP Policy     -> avg cost: {np.mean(adp_costs):.2f}")
+hybrid_costs = run_simulation(HybridPolicy(), num_experiments=100)
+print(f"Hybrid Policy  -> avg cost: {np.mean(hybrid_costs):.2f}")
+
+#np.random.seed(20)
+#adp_costs = run_simulation(ADPPolicy(), num_experiments=100)
+#print(f"ADP Policy     -> avg cost: {np.mean(adp_costs):.2f}")
 
 
 # =============================================================================
@@ -85,8 +85,8 @@ results = {
     # "DL":         dl_costs,
     # "2SP":        sp2_costs,
     # "MS-SP":      ms_costs,
-    #"Hybrid":     hybrid_costs,
-     "ADP":        adp_costs,
+    "Hybrid":     hybrid_costs,
+     #"ADP":        adp_costs,
 }
 
 # =============================================================================
