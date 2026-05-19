@@ -1,0 +1,290 @@
+"""
+Task 4 - ADP Training Script (Fitted Value Iteration)
+======================================================
+Trains the Value Function Approximation (VFA) weights for the ADP policy.
+
+Strategy (Fitted Value Iteration on MILP trajectories):
+  - Solves the MILP (Task 1) for each training day to get hindsight-optimal trajectories
+  - Fixes those trajectories (states + costs) as the training dataset
+  - Iterates K_ITER rounds of Bellman backup:
+      target[n,t] = -cost[t+1] + eta[t+1] @ phi(s_{n,t+1})
+      eta[t]      = argmin sum_n (eta[t]' * phi(s_{n,t}) - target[n,t])^2
+  - Iteration 1 with eta=0 is identical to the original one-pass OLS
+  - Saves the final weights to 'eta.npy' for use in the ADP policy
+
+Usage:
+    python task4_training_vfa
+
+Output:
+    task4/eta.npy  -- array of shape (T_TOTAL, N_FEATURES) with the learned VFA weights
+"""
+
+import sys
+import numpy as np
+import pandas as pd
+from sklearn.linear_model import Ridge
+
+ROOT      = r'c:\Users\rodri\Decision_Making_Under_Uncertainty'
+DATA_PATH = ROOT + r'\given'
+OUT_OF_SAMPLE_PATH = ROOT + r'\out_of_sample'
+sys.path.append(DATA_PATH)
+sys.path.append(ROOT)
+sys.path.append(OUT_OF_SAMPLE_PATH)
+
+import v2_SystemCharacteristics as sc
+from task4.milp_solver import solve_milp_with_results
+
+# =============================================================================
+# 1. System parameters
+# =============================================================================
+params  = sc.get_fixed_data()
+T_TOTAL = int(params['num_timeslots'])  # timeslots per day
+
+# =============================================================================
+# 2. Load training data
+# =============================================================================
+price_data = pd.read_csv(f'{OUT_OF_SAMPLE_PATH}/OutOfSamplePriceData.csv')
+occ_room1  = pd.read_csv(f'{OUT_OF_SAMPLE_PATH}/OutOfSampleOccupancyRoom1.csv')
+occ_room2  = pd.read_csv(f'{OUT_OF_SAMPLE_PATH}/OutOfSampleOccupancyRoom2.csv')
+
+print(f"Data loaded — Prices: {price_data.shape}, Occ1: {occ_room1.shape}, Occ2: {occ_room2.shape}")
+
+# =============================================================================
+# 3. Collect hindsight-optimal trajectories via MILP
+#    For each training day, solve the MILP with full price/occupancy knowledge.
+# =============================================================================
+N_DAYS       = len(price_data)
+trajectories = []
+
+for day in range(N_DAYS):
+    prices = price_data.iloc[day, :].values
+    occ1   = occ_room1.iloc[day, :].values
+    occ2   = occ_room2.iloc[day, :].values
+
+    traj = solve_milp_with_results(prices, occ1, occ2, params)
+    trajectories.append(traj)
+
+print(f"\nTrajectories collected: {len(trajectories)} days x {T_TOTAL} timeslots")
+
+# =============================================================================
+# 4. Feature vector phi(s)
+#    State s = (endogenous, exogenous) = (T_r1, T_r2, H, price, occ1, occ2)
+#    The bias term (1.0) is included to allow an affine approximation.
+# =============================================================================
+P_VENT = float(params['ventilation_power'])
+
+def state(T_r1, T_r2, H, price, occ1, occ2):
+    return np.array([1.0, T_r1, T_r2, H, price, occ1, occ2])
+
+N_FEATURES = 7
+
+# =============================================================================
+# 5. Build V* targets and feature matrices
+#
+#    V*(s_{n,t}) = -(remaining optimal cost from t+1 to T) on trajectory n.
+#    Negated because we frame this as a value function (higher = better).
+#
+#    State features at timeslot t use the *next* endogenous state (post-transition)
+#    paired with the *current* exogenous inputs (price, occupancy).
+# =============================================================================
+N      = len(trajectories)
+V_star = np.zeros((N, T_TOTAL))             # OLS targets:  V_star[n, t]
+State  = np.zeros((T_TOTAL, N, N_FEATURES)) # OLS features: State[t, n, :]
+
+for n, traj in enumerate(trajectories):
+    prices = np.array(traj['price'])
+    h_r1   = np.array(traj['h_r1'])
+    h_r2   = np.array(traj['h_r2'])
+    v      = np.array(traj['v'])
+    T_r1_s = np.array(traj['Temp_r1'])
+    T_r2_s = np.array(traj['Temp_r2'])
+    H_s    = np.array(traj['Hum'])
+    occ1_s = np.array(traj['Occ_r1'])
+    occ2_s = np.array(traj['Occ_r2'])
+
+    cost_per_hour = prices * (h_r1 + h_r2 + P_VENT * v)
+
+    for t in range(T_TOTAL):
+        # Remaining cost after timeslot t (target for VFA at state s_t)
+        V_star[n, t] = -np.sum(cost_per_hour[t+1:])
+
+        # Features use next-state temperatures/humidity; at the last step use current state
+        if t < T_TOTAL - 1:
+            State[t, n] = state(T_r1_s[t+1], T_r2_s[t+1], H_s[t+1],
+                                prices[t], occ1_s[t], occ2_s[t])
+        else:
+            State[t, n] = state(T_r1_s[t], T_r2_s[t], H_s[t],
+                                prices[t], occ1_s[t], occ2_s[t])
+
+# =============================================================================
+# 6. OLS regression per timeslot → learn eta_t
+#    For each t: eta_t = argmin_w  sum_n (w' * phi(s_{n,t}) - V*(s_{n,t}))^2
+# =============================================================================
+eta = np.zeros((T_TOTAL, N_FEATURES))  # shape (T, 7)
+
+for t in range(T_TOTAL):
+    eta[t], _, _, _ = np.linalg.lstsq(State[t], V_star[:, t], rcond=None)
+    print(f"t={t}: eta = {eta[t].round(3)}")
+
+#ridge = Ridge(alpha=1.0, fit_intercept=False)
+
+#for t in range(T_TOTAL):
+  #  ridge.fit(State[t], V_star[:, t])
+ #   eta[t] = ridge.coef_
+   # print(f"t={t}: eta = {eta[t].round(3)}")
+
+# =============================================================================
+# 7. Save weights
+# =============================================================================
+output_path = 'task4/eta.npy'
+np.save(output_path, eta)
+print(f"\nWeights saved to '{output_path}' — shape: {eta.shape}  ({T_TOTAL} timeslots x {N_FEATURES} features: [1, T1, T2, H, price, occ1, occ2])")
+
+# =============================================================================
+# 8. In-sample R² per timeslot (goodness-of-fit diagnostic)
+#    Note: t=T-1 always gives R²=1.0 because V*(s_{n,T-1}) = 0 for all n.
+# =============================================================================
+for t in range(T_TOTAL):
+    pred   = State[t] @ eta[t]
+    ss_res = np.sum((V_star[:, t] - pred) ** 2)
+    ss_tot = np.sum((V_star[:, t] - V_star[:, t].mean()) ** 2)
+    r2     = 1 - ss_res / ss_tot if ss_tot > 0 else 1.0
+    print(f"t={t}: R² = {r2:.4f}")
+
+# =============================================================================
+# 9. Rollout-Based Fitted Value Iteration
+#    Each iteration: roll out the ADP policy (using current eta) on training
+#    days to generate new trajectories, then refit eta on those trajectories.
+#    This ensures training states match states actually visited by the policy.
+# =============================================================================
+
+def _transition(T_r1, T_r2, H, p1, p2, v, t, occ1, occ2):
+    T1n = (T_r1
+           + float(params['heat_exchange_coeff']) * (T_r2 - T_r1)
+           - float(params['thermal_loss_coeff']) * (T_r1 - params['outdoor_temperature'][t])
+           + float(params['heating_efficiency_coeff']) * p1
+           - float(params['heat_vent_coeff']) * v
+           + float(params['heat_occupancy_coeff']) * occ1)
+    T2n = (T_r2
+           + float(params['heat_exchange_coeff']) * (T_r1 - T_r2)
+           - float(params['thermal_loss_coeff']) * (T_r2 - params['outdoor_temperature'][t])
+           + float(params['heating_efficiency_coeff']) * p2
+           - float(params['heat_vent_coeff']) * v
+           + float(params['heat_occupancy_coeff']) * occ2)
+    Hn  = (H
+           + float(params['humidity_occupancy_coeff']) * (occ1 + occ2)
+           - float(params['humidity_vent_coeff']) * v)
+    return T1n, T2n, Hn
+
+
+def _adp_action(T_r1, T_r2, H, price, occ1, occ2, t, low_r1, low_r2, vc, eta_t):
+    """Matches policy_test_task4.solve_adp_step. Enumerates corners instead of
+    calling Gurobi — optimal because the objective is linear in p1 and p2."""
+    P_max  = float(params['heating_max_power'])
+    P_vent = float(params['ventilation_power'])
+    T_low  = float(params['temp_min_comfort_threshold'])
+    T_ok   = float(params['temp_OK_threshold'])
+    T_high = float(params['temp_max_comfort_threshold'])
+    H_high = float(params['humidity_threshold'])
+    U_vent = int(params['vent_min_up_time'])
+
+    if T_r1 < T_low: low_r1 = 1
+    if low_r1 and T_r1 >= T_ok: low_r1 = 0
+    if T_r2 < T_low: low_r2 = 1
+    if low_r2 and T_r2 >= T_ok: low_r2 = 0
+
+    p1_opts = [P_max] if low_r1 else ([0.0] if T_r1 > T_high else [0.0, P_max])
+    p2_opts = [P_max] if low_r2 else ([0.0] if T_r2 > T_high else [0.0, P_max])
+    v_opts  = [1] if (H > H_high or 1 <= vc <= U_vent - 1) else [0, 1]
+
+    best_val, best = np.inf, (p1_opts[0], p2_opts[0], v_opts[0])
+    for p1 in p1_opts:
+        for p2 in p2_opts:
+            for v in v_opts:
+                T1n, T2n, Hn = _transition(T_r1, T_r2, H, p1, p2, v, t, occ1, occ2)
+                immediate = price * (p1 + p2 + P_vent * v)
+                future    = eta_t @ state(T1n, T2n, Hn, price, occ1, occ2)
+                if immediate - future < best_val:
+                    best_val = immediate - future
+                    best = (p1, p2, v)
+
+    return best[0], best[1], best[2], low_r1, low_r2
+
+
+K_ITER_FVI  = 30
+ALPHA       = 0.1  # damping: eta = (1-alpha)*eta_old + alpha*eta_new
+RIDGE_ALPHA = 5.0   # Ridge regularisation to prevent extreme weight swings
+
+ridge_reg    = Ridge(alpha=RIDGE_ALPHA, fit_intercept=False)
+best_eta     = eta.copy()
+best_cost    = np.inf
+
+print("\n--- Rollout-Based Fitted Value Iteration ---")
+
+for k in range(K_ITER_FVI):
+    State_r = np.zeros((T_TOTAL, N, N_FEATURES))
+    Cost_r  = np.zeros((N, T_TOTAL))
+
+    for n in range(N):
+        prices_n = price_data.iloc[n, :].values
+        occ1_n   = occ_room1.iloc[n, :].values
+        occ2_n   = occ_room2.iloc[n, :].values
+
+        T_r1, T_r2, H_ = float(params['T1']), float(params['T2']), float(params['H'])
+        low_r1, low_r2, vc = 0, 0, 0
+
+        for t in range(T_TOTAL):
+            p1, p2, v, low_r1, low_r2 = _adp_action(
+                T_r1, T_r2, H_, prices_n[t], occ1_n[t], occ2_n[t],
+                t, low_r1, low_r2, vc, eta[t])
+            vc = vc + 1 if v == 1 else 0
+
+            Cost_r[n, t] = prices_n[t] * (p1 + p2 + P_VENT * v)
+            T1n, T2n, Hn = _transition(T_r1, T_r2, H_, p1, p2, v, t, occ1_n[t], occ2_n[t])
+
+            if t < T_TOTAL - 1:
+                State_r[t, n] = state(T1n, T2n, Hn, prices_n[t], occ1_n[t], occ2_n[t])
+            else:
+                State_r[t, n] = state(T_r1, T_r2, H_, prices_n[t], occ1_n[t], occ2_n[t])
+
+            T_r1, T_r2, H_ = T1n, T2n, Hn
+
+    # Cumulative cost-to-go targets from rollout
+    target_r = np.zeros((N, T_TOTAL))
+    for t in range(T_TOTAL):
+        target_r[:, t] = -np.sum(Cost_r[:, t + 1:], axis=1)
+
+    # Ridge fit then damped update
+    eta_cand = np.zeros_like(eta)
+    for t in range(T_TOTAL):
+        ridge_reg.fit(State_r[t], target_r[:, t])
+        eta_cand[t] = ridge_reg.coef_
+
+    eta_new = (1 - ALPHA) * eta + ALPHA * eta_cand
+    delta   = np.max(np.abs(eta_new - eta))
+    eta     = eta_new
+
+    r2s = []
+    for t in range(T_TOTAL):
+        pred   = State_r[t] @ eta[t]
+        ss_res = np.sum((target_r[:, t] - pred) ** 2)
+        ss_tot = np.sum((target_r[:, t] - target_r[:, t].mean()) ** 2)
+        r2s.append(1 - ss_res / ss_tot if ss_tot > 0 else 1.0)
+
+    mean_cost = np.mean(np.sum(Cost_r, axis=1))
+    if mean_cost < best_cost:
+        best_cost = mean_cost
+        best_eta  = eta.copy()
+        marker = " ← best"
+    else:
+        marker = ""
+
+    print(f"iter {k+1:2d}/{K_ITER_FVI}  |Δeta|={delta:.4f}  "
+          f"mean_R²={np.mean(r2s):.4f}  mean_rollout_cost={mean_cost:.2f}{marker}")
+
+    if delta < 0.01:
+        print(f"Converged at iteration {k+1}.")
+        break
+
+np.save(output_path, best_eta)
+print(f"\nBest rollout cost: {best_cost:.2f}  →  weights saved to '{output_path}'")

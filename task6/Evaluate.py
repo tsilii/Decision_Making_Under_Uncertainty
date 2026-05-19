@@ -11,7 +11,7 @@ import sys
 import os
 
 # ── paths ─────────────────────────────────────────────────────────────────────
-BASE_DIR  = "/Users/manostsili/Desktop/dtu/courses/decision making under uncertainty /assignment_DC"
+BASE_DIR  = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 TASK1_DIR = os.path.join(BASE_DIR, "Task1")
 TASK3_DIR = os.path.join(BASE_DIR, "Task3")
 TASK5_DIR = os.path.join(BASE_DIR, "Task5")
@@ -31,13 +31,13 @@ from Environment import run_simulation
 # ── import policies ───────────────────────────────────────────────────────────
 from DummyPolicy     import DummyPolicy
 from HindsightPolicy import HindsightPolicy
-from DLPolicy import DLPolicy
+from DLPolicy_Tsilis_updated import DLPolicy
 import importlib
 sys.path.insert(0, os.path.join(BASE_DIR, "Task6"))
 TwoStageSPPolicy = importlib.import_module("2SPPolicy").TwoStageSPPolicy
 from MSPolicy import MultiStageSPPolicy
 from HybridPolicy import HybridPolicy
-# from ADPPolicy import ADPPolicy  # available in task6/ADPPolicy.py (Rodrigo)
+from ADPPolicy import ADPPolicy  # available in task6/ADPPolicy.py (Rodrigo)
 
 
 # =============================================================================
@@ -50,13 +50,13 @@ print("Running evaluations...")
 # dummy_costs = run_simulation(DummyPolicy(), num_experiments=100)
 # print(f"Dummy Policy  -> avg cost: {np.mean(dummy_costs):.2f}")
 
-# np.random.seed(20)
-# hindsight_costs = run_simulation(HindsightPolicy(), num_experiments=100)
-# print(f"Hindsight     -> avg cost: {np.mean(hindsight_costs):.2f}")
+np.random.seed(20)
+hindsight_costs = run_simulation(HindsightPolicy(), num_experiments=100)
+print(f"Hindsight     -> avg cost: {np.mean(hindsight_costs):.2f}")
 
-# np.random.seed(20)
-# dl_costs = run_simulation(DLPolicy(), num_experiments=100)
-# print(f"DL Policy     -> avg cost: {np.mean(dl_costs):.2f}")
+#np.random.seed(20)
+#dl_costs = run_simulation(DLPolicy(), num_experiments=100, verbose=True)
+#print(f"DL Policy     -> avg cost: {np.mean(dl_costs):.2f}")
 
 # np.random.seed(20)
 # sp2_costs = run_simulation(TwoStageSPPolicy(), num_experiments=100)
@@ -66,13 +66,13 @@ print("Running evaluations...")
 # ms_costs = run_simulation(MultiStageSPPolicy(L=3, B=[20, 4], S_init=500), num_experiments=100)
 # print(f"MS Policy      -> avg cost: {np.mean(ms_costs):.2f}")
 
-np.random.seed(20)
-hybrid_costs = run_simulation(HybridPolicy(), num_experiments=100)
-print(f"Hybrid Policy  -> avg cost: {np.mean(hybrid_costs):.2f}")
+#np.random.seed(20)
+#hybrid_costs = run_simulation(HybridPolicy(), num_experiments=100)
+#print(f"Hybrid Policy  -> avg cost: {np.mean(hybrid_costs):.2f}")
 
-# np.random.seed(20)
-# adp_costs = run_simulation(ADPPolicy(), num_experiments=100)
-# print(f"ADP Policy     -> avg cost: {np.mean(adp_costs):.2f}")
+np.random.seed(20)
+adp_costs = run_simulation(ADPPolicy(), num_experiments=100)
+print(f"ADP Policy     -> avg cost: {np.mean(adp_costs):.2f}")
 
 
 # =============================================================================
@@ -81,12 +81,12 @@ print(f"Hybrid Policy  -> avg cost: {np.mean(hybrid_costs):.2f}")
 
 results = {
     # "Dummy":      dummy_costs,
-    # "Hindsight":  hindsight_costs,
+    "Hindsight":  hindsight_costs,
     # "DL":         dl_costs,
     # "2SP":        sp2_costs,
     # "MS-SP":      ms_costs,
-    "Hybrid":     hybrid_costs,
-    # "ADP":        adp_costs,
+    #"Hybrid":     hybrid_costs,
+     "ADP":        adp_costs,
 }
 
 # =============================================================================

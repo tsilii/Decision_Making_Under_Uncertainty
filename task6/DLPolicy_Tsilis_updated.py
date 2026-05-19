@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 """
 ================================================================================
@@ -60,7 +61,7 @@ import sys
 import os
 
 # ── paths ─────────────────────────────────────────────────────────────────────
-BASE_DIR  = "/Users/manostsili/Desktop/dtu/courses/decision making under uncertainty /assignment_DC"
+BASE_DIR  = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 GIVEN_DIR = os.path.join(BASE_DIR, "given")
 sys.path.insert(0, GIVEN_DIR)
 
@@ -166,7 +167,7 @@ def resolve_slot0_overrules(state, params):
     p1_fix = None 
     if T1_0 > T_high:                      # BUG H fix: strict inequality
         p1_fix = 0.0
-    if T1_0 <= T_low:                      # BUG G fix: check low temp directly
+    if T1_0 < T_low:                      # BUG G fix: check low temp directly
         p1_fix = P_max
     if u1_0 == 1: 
         if T1_0 < T_OK:                   # BUG G fix: check temperature too
@@ -178,7 +179,7 @@ def resolve_slot0_overrules(state, params):
     p2_fix = None
     if T2_0 > T_high:
         p2_fix = 0.0
-    if T2_0 <= T_low:
+    if T2_0 < T_low:
         p2_fix = P_max
     if u2_0 == 1:
         if T2_0 < T_OK:

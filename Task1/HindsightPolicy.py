@@ -66,7 +66,7 @@ class HindsightPolicy:
             day_idx = self.current_day
 
             price_row = self.price_df.iloc[day_idx].values
-            prices    = price_row[:self.params["num_timeslots"]]
+            prices    = price_row[1:self.params["num_timeslots"] + 1]
             occ1      = self.occ1_df.iloc[day_idx].values
             occ2      = self.occ2_df.iloc[day_idx].values
 
@@ -77,44 +77,44 @@ class HindsightPolicy:
         v  = self.planned_v[t]
 
         # ── Apply overrule controllers (same logic as Environment.py) ─────────
-        params  = self.params
-        T1      = state["T1"]
-        T2      = state["T2"]
-        H       = state["H"]
-        P_max   = params["heating_max_power"]
-        T_low   = params["temp_min_comfort_threshold"]
-        T_OK    = params["temp_OK_threshold"]
-        T_high  = params["temp_max_comfort_threshold"]
-        H_high  = params["humidity_threshold"]
-        U_vent  = params["vent_min_up_time"]
-        vent_counter    = state["vent_counter"]
-        low_override_r1 = state["low_override_r1"]
-        low_override_r2 = state["low_override_r2"]
+        #params  = self.params
+        #T1      = state["T1"]
+        #T2      = state["T2"]
+        #H       = state["H"]
+        #P_max   = params["heating_max_power"]
+        #T_low   = params["temp_min_comfort_threshold"]
+        #T_OK    = params["temp_OK_threshold"]
+        #T_high  = params["temp_max_comfort_threshold"]
+        #H_high  = params["humidity_threshold"]
+        #U_vent  = params["vent_min_up_time"]
+        #vent_counter    = state["vent_counter"]
+        #low_override_r1 = state["low_override_r1"]
+        #low_override_r2 = state["low_override_r2"]
 
-        if T1 < T_low:
-            low_override_r1 = 1
-        if low_override_r1 == 1:
-            if T1 >= T_OK:
-                low_override_r1 = 0
-            else:
-                p1 = P_max
-        if T1 > T_high:
-            p1 = 0
+        #if T1 < T_low:
+         #   low_override_r1 = 1
+        #if low_override_r1 == 1:
+         #   if T1 >= T_OK:
+          #      low_override_r1 = 0
+           # else:
+            #    p1 = P_max
+        #if T1 > T_high:
+        #    p1 = 0
 
-        if T2 < T_low:
-            low_override_r2 = 1
-        if low_override_r2 == 1:
-            if T2 >= T_OK:
-                low_override_r2 = 0
-            else:
-                p2 = P_max
-        if T2 > T_high:
-            p2 = 0
+        #if T2 < T_low:
+          #  low_override_r2 = 1
+        #if low_override_r2 == 1:
+         #   if T2 >= T_OK:
+          #      low_override_r2 = 0
+           # else:
+         #       p2 = P_max
+        #if T2 > T_high:
+         #   p2 = 0
 
-        if H > H_high:
-            v = 1
-        if 1 <= vent_counter <= U_vent - 1:
-            v = 1
+        #if H > H_high:
+         #   v = 1
+        #if 1 <= vent_counter <= U_vent - 1:
+         #   v = 1
 
         return {
             "HeatPowerRoom1": p1,

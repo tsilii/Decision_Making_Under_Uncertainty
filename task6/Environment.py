@@ -17,7 +17,7 @@ import sys
 import os
 
 # ── paths ─────────────────────────────────────────────────────────────────────
-BASE_DIR    = "/Users/manostsili/Desktop/dtu/courses/decision making under uncertainty /assignment_DC"
+BASE_DIR  = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 GIVEN_DIR   = os.path.join(BASE_DIR, "given")    # professor's files
 DATA_DIR    = os.path.join(BASE_DIR, "data")     # CSV files
 
@@ -69,7 +69,7 @@ def apply_overrule_controllers(state, action, params):
     if T1 < T_low:
         low_override_r1 = 1
     if low_override_r1 == 1:
-        if T1 >= T_OK:
+        if T1 > T_OK:
             low_override_r1 = 0
         else:
             p1 = P_max
@@ -82,7 +82,7 @@ def apply_overrule_controllers(state, action, params):
     if T2 < T_low:
         low_override_r2 = 1
     if low_override_r2 == 1:
-        if T2 >= T_OK:
+        if T2 > T_OK:
             low_override_r2 = 0
         else:
             p2 = P_max
@@ -173,16 +173,19 @@ def compute_next_state(state, effective_action, next_occ1, next_occ2,
     T_low = params["temp_min_comfort_threshold"]
     T_OK  = params["temp_OK_threshold"]
 
+    T1_next = round(T1_next, 6)
+    T2_next = round(T2_next, 6)
+
     low_override_r1_next = state["low_override_r1"]
     if T1_next < T_low:
         low_override_r1_next = 1
-    elif T1_next >= T_OK:
+    elif T1_next > T_OK:
         low_override_r1_next = 0
 
     low_override_r2_next = state["low_override_r2"]
     if T2_next < T_low:
         low_override_r2_next = 1
-    elif T2_next >= T_OK:
+    elif T2_next > T_OK:
         low_override_r2_next = 0
 
     next_state = {

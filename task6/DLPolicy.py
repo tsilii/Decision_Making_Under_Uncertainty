@@ -160,31 +160,38 @@ def resolve_slot0_overrules(state, params):
     T_low   = params['temp_min_comfort_threshold']
     H_high  = params['humidity_threshold']
     U_vent  = params['vent_min_up_time']
+    T_OK   = params['temp_OK_threshold']
 
     # ── Room 1 heating ────────────────────────────────────────────────────────
+    p1_fix = None 
     if T1_0 > T_high:                      # BUG H fix: strict inequality
         p1_fix = 0.0
-    elif T1_0 <= T_low or u1_0 == 1:      # BUG G fix: check temperature too
+    if T1_0 < T_low:                      # BUG G fix: check low temp directly
         p1_fix = P_max
-    else:
-        p1_fix = None                      # MILP decides
+    if u1_0 == 1: 
+        if T1_0 < T_OK:                   # BUG G fix: check temperature too
+            p1_fix = P_max
+
+                       # MILP decides
 
     # ── Room 2 heating ────────────────────────────────────────────────────────
+    p2_fix = None
     if T2_0 > T_high:
         p2_fix = 0.0
-    elif T2_0 <= T_low or u2_0 == 1:
+    if T2_0 < T_low:
         p2_fix = P_max
-    else:
-        p2_fix = None
+    if u2_0 == 1:
+        if T2_0 < T_OK:
+            p2_fix = P_max
+  
 
     # ── Ventilation ───────────────────────────────────────────────────────────
+    v0_fix = None                      # MILP decides
     if H_0 > H_high:                       # BUG F fix: humidity overrule
         v0_fix = 1
-    elif 1 <= vent_cnt < U_vent:           # carry-over inertia
+    if 1 <= vent_cnt < U_vent:           # carry-over inertia
         v0_fix = 1
-    else:
-        v0_fix = None                      # MILP decides
-
+                    # MILP decides
     return p1_fix, p2_fix, v0_fix
 
 
@@ -388,7 +395,9 @@ def build_and_solve_milp(state, prices, occ1s, occ2s, params):
     # H[1] > H_high forces v[0]=1 — but v[0] is already fixed via v0_fix
     # if H_0 > H_high, so this constraint is consistent.
     def hum_force_vent(m, t):
-        return m.H[t] <= H_high + M_hum * m.v[t - 1]
+        if t == L:
+            return pyo.Constraint.Skip  # no action after the last state slot
+        return m.H[t] <= H_high + M_hum * m.v[t]
     m.HumForceVent = pyo.Constraint(m.Tsta, rule=hum_force_vent)
 
     # ── Ventilation startup detection ──────────────────────────────────────────

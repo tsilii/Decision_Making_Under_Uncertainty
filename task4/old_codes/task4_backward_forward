@@ -28,7 +28,7 @@ sys.path.append(DATA_PATH)
 sys.path.append(ROOT)
 
 import v2_SystemCharacteristics as sc
-from task4.old_codes.milp_solver import solve_milp_with_results
+from task4.milp_solver import solve_milp_with_results
 
 # Add task4 directory to path so we can import ADPPolicy
 TASK4_DIR = os.path.join(ROOT, 'task4')
@@ -64,7 +64,7 @@ P_MAX  = float(params['heating_max_power'])
 # =============================================================================
 # 2. Load training data
 # =============================================================================
-price_data = pd.read_csv(f'{DATA_PATH}/PriceData.csv')
+price_data = pd.read_csv(f'{DATA_PATH}/v2_PriceData.csv')
 occ_room1  = pd.read_csv(f'{DATA_PATH}/OccupancyRoom1.csv')
 occ_room2  = pd.read_csv(f'{DATA_PATH}/OccupancyRoom2.csv')
 
@@ -77,7 +77,7 @@ N_DAYS       = len(price_data)
 trajectories = []
 
 for day in range(N_DAYS):
-    prices = price_data.iloc[day, :].values
+    prices = price_data.iloc[day, 1:].values
     occ1   = occ_room1.iloc[day, :].values
     occ2   = occ_room2.iloc[day, :].values
 

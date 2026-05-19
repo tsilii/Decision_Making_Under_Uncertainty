@@ -1,0 +1,321 @@
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'given'))
+
+import numpy as np
+import pickle
+from sklearn.linear_model import Ridge
+import pandas as pd
+
+from v2_SystemCharacteristics import get_fixed_data
+
+DATA_DIR    = os.path.join(os.path.dirname(__file__), 'data')
+WEIGHTS_FILE = os.path.join(os.path.dirname(__file__), 'vfa_weights.pkl')
+
+_params = get_fixed_data()
+
+
+# ---------------------------------------------------------------------------
+# Feature engineering
+# ---------------------------------------------------------------------------
+
+def features(state, t):
+    p = _params
+    T1, T2 = state['T1'], state['T2']
+    T_avg = (T1 + T2) / 2.0
+    T_min = min(T1, T2)
+    T_max = max(T1, T2)
+    H     = state['H']
+    price = state['price_t']
+    price_trend = state['price_t'] - state['price_previous']
+    occ1, occ2  = state['Occ1'], state['Occ2']
+    occ_total   = occ1 + occ2
+    time_remaining = 9 - t
+
+    # Project temperature 1 step forward with zero heating & zero ventilation
+    # to capture upcoming overrule risk (T_out is known/deterministic)
+    T_out0 = p['outdoor_temperature'][min(t, 9)]
+    T1_p1 = (T1 + p['heat_exchange_coeff'] * (T2 - T1)
+             - p['thermal_loss_coeff'] * (T1 - T_out0)
+             + p['heat_occupancy_coeff'] * occ1)
+    T2_p1 = (T2 + p['heat_exchange_coeff'] * (T1 - T2)
+             - p['thermal_loss_coeff'] * (T2 - T_out0)
+             + p['heat_occupancy_coeff'] * occ2)
+    T_min_p1 = min(T1_p1, T2_p1)
+
+    # Project 2 steps ahead (use mean-reversion for occupancy at t+1)
+    T_out1  = p['outdoor_temperature'][min(t + 1, 9)]
+    occ1_p1 = occ1 + 0.25 * (35.0 - occ1)
+    occ2_p1 = occ2 + 0.25 * (25.0 - occ2)
+    T1_p2 = (T1_p1 + p['heat_exchange_coeff'] * (T2_p1 - T1_p1)
+             - p['thermal_loss_coeff'] * (T1_p1 - T_out1)
+             + p['heat_occupancy_coeff'] * occ1_p1)
+    T2_p2 = (T2_p1 + p['heat_exchange_coeff'] * (T1_p1 - T2_p1)
+             - p['thermal_loss_coeff'] * (T2_p1 - T_out1)
+             + p['heat_occupancy_coeff'] * occ2_p1)
+    T_min_p2 = min(T1_p2, T2_p2)
+
+    return np.array([
+        1.0,
+        T_avg,
+        T_min,
+        max(0.0, 18.0 - T_min),      # current overrule risk
+        max(0.0, T_max - 26.0),
+        H,
+        max(0.0, H - 70.0),
+        price,
+        price_trend,
+        occ_total,
+        float(time_remaining),
+        T_min_p1,                      # projected T_min in 1 step (no heating)
+        max(0.0, 18.0 - T_min_p1),    # overrule risk in 1 step
+        T_min_p2,                      # projected T_min in 2 steps (no heating)
+        max(0.0, 18.0 - T_min_p2),    # overrule risk in 2 steps
+    ])
+
+
+# ---------------------------------------------------------------------------
+# One-step deterministic simulator
+# ---------------------------------------------------------------------------
+
+def simulate_one_step(state, action, t):
+    p = _params
+    p1 = float(np.clip(action['HeatPowerRoom1'], 0, p['heating_max_power']))
+    p2 = float(np.clip(action['HeatPowerRoom2'], 0, p['heating_max_power']))
+    v  = int(action['VentilationON'] > 0.5)
+
+    T_out = p['outdoor_temperature'][t]
+
+    T1_new = (state['T1']
+              + p['heat_exchange_coeff'] * (state['T2'] - state['T1'])
+              - p['thermal_loss_coeff']  * (state['T1'] - T_out)
+              + p['heating_efficiency_coeff'] * p1
+              - p['heat_vent_coeff'] * v
+              + p['heat_occupancy_coeff'] * state['Occ1'])
+
+    T2_new = (state['T2']
+              + p['heat_exchange_coeff'] * (state['T1'] - state['T2'])
+              - p['thermal_loss_coeff']  * (state['T2'] - T_out)
+              + p['heating_efficiency_coeff'] * p2
+              - p['heat_vent_coeff'] * v
+              + p['heat_occupancy_coeff'] * state['Occ2'])
+
+    H_new = (state['H']
+             + p['humidity_occupancy_coeff'] * (state['Occ1'] + state['Occ2'])
+             - p['humidity_vent_coeff'] * v)
+
+    low_ov1 = 0
+    if T1_new < p['temp_min_comfort_threshold']:
+        low_ov1 = 1
+    elif state['low_override_r1'] == 1 and T1_new < p['temp_OK_threshold']:
+        low_ov1 = 1
+
+    low_ov2 = 0
+    if T2_new < p['temp_min_comfort_threshold']:
+        low_ov2 = 1
+    elif state['low_override_r2'] == 1 and T2_new < p['temp_OK_threshold']:
+        low_ov2 = 1
+
+    vent_counter_new = (state['vent_counter'] + 1) if v == 1 else 0
+
+    # Expected next occupancy / price (use mean-reversion)
+    from OccupancyProcessRestaurant import next_occupancy_levels
+    from PriceProcessRestaurant import price_model
+    o1_next = state['Occ1'] + 0.25 * (35.0 - state['Occ1'])
+    o2_next = state['Occ2'] + 0.25 * (25.0 - state['Occ2'])
+    price_next = (state['price_t']
+                  + 0.6 * (state['price_t'] - state['price_previous'])
+                  + 0.12 * (4.0 - state['price_t']))
+    price_next = float(np.clip(price_next, 0, 12))
+
+    return {
+        'T1': T1_new, 'T2': T2_new, 'H': H_new,
+        'Occ1': o1_next, 'Occ2': o2_next,
+        'price_t': price_next, 'price_previous': state['price_t'],
+        'vent_counter': vent_counter_new,
+        'low_override_r1': low_ov1,
+        'low_override_r2': low_ov2,
+        'current_time': t + 1,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Overrule logic
+# ---------------------------------------------------------------------------
+
+def apply_overrules(state, action):
+    p = _params
+    act = dict(action)
+    if state['T1'] > p['temp_max_comfort_threshold']:
+        act['HeatPowerRoom1'] = 0.0
+    if state['T2'] > p['temp_max_comfort_threshold']:
+        act['HeatPowerRoom2'] = 0.0
+    if state['low_override_r1']:
+        act['HeatPowerRoom1'] = p['heating_max_power']
+    if state['low_override_r2']:
+        act['HeatPowerRoom2'] = p['heating_max_power']
+    if state['H'] > p['humidity_threshold']:
+        act['VentilationON'] = 1
+    vc = state['vent_counter']
+    if vc > 0 and vc < p['vent_min_up_time']:
+        act['VentilationON'] = 1
+    return act
+
+
+# ---------------------------------------------------------------------------
+# Training: per-timestep VFA via backward induction
+# ---------------------------------------------------------------------------
+
+HEAT_GRID = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0]
+VENT_GRID  = [0, 1]
+
+
+def _best_action_value(state, t, theta_next):
+    """1-step lookahead using current VFA weights for t+1."""
+    p = _params
+    best_val = np.inf
+    best_act = None
+    for p1 in HEAT_GRID:
+        for p2 in HEAT_GRID:
+            for v in VENT_GRID:
+                act = {'HeatPowerRoom1': p1, 'HeatPowerRoom2': p2, 'VentilationON': v}
+                eff = apply_overrules(state, act)
+                cost = state['price_t'] * (
+                    eff['HeatPowerRoom1'] + eff['HeatPowerRoom2']
+                    + p['ventilation_power'] * eff['VentilationON'])
+                nxt = simulate_one_step(state, eff, t)
+                future = (theta_next @ features(nxt, t + 1)) if t < 9 else 0.0
+                total = cost + future
+                if total < best_val:
+                    best_val = total
+                    best_act = eff
+    return best_val, best_act
+
+
+def train_vfa():
+    price_df = pd.read_csv(os.path.join(DATA_DIR, 'v2_PriceData.csv'))
+    occ1_df  = pd.read_csv(os.path.join(DATA_DIR, 'OccupancyRoom1.csv'))
+    occ2_df  = pd.read_csv(os.path.join(DATA_DIR, 'OccupancyRoom2.csv'))
+    N = len(price_df)
+    T = 10
+    p = _params
+
+    N_FEAT = 15
+    theta = [np.zeros(N_FEAT) for _ in range(T + 1)]
+
+    I = 30  # training iterations
+
+    for iteration in range(I):
+        X_by_t = [[] for _ in range(T)]
+        y_by_t = [[] for _ in range(T)]
+
+        for d in range(N):
+            price_row = price_df.iloc[d]
+            lam   = [price_row[str(t + 1)] for t in range(T)]
+            kap1  = [occ1_df.iloc[d][str(t)] for t in range(T)]
+            kap2  = [occ2_df.iloc[d][str(t)] for t in range(T)]
+
+            # Build initial state for this day
+            state = {
+                'T1': p['T1'], 'T2': p['T2'], 'H': p['H'],
+                'Occ1': kap1[0], 'Occ2': kap2[0],
+                'price_t': lam[0],
+                'price_previous': float(price_row['Previous price at the first timeslot']),
+                'vent_counter': 0,
+                'low_override_r1': 0, 'low_override_r2': 0,
+                'current_time': 0,
+            }
+
+            # Forward rollout collecting states
+            traj_states = [state]
+            traj_costs  = []
+            for t in range(T):
+                if t + 1 < T:
+                    theta_next = theta[t + 1]
+                else:
+                    theta_next = np.zeros(15)
+                _, act = _best_action_value(traj_states[t], t, theta_next)
+                eff = apply_overrules(traj_states[t], act)
+                cost = traj_states[t]['price_t'] * (
+                    eff['HeatPowerRoom1'] + eff['HeatPowerRoom2']
+                    + p['ventilation_power'] * eff['VentilationON'])
+                traj_costs.append(cost)
+                if t + 1 < T:
+                    nxt = simulate_one_step(traj_states[t], eff, t)
+                    # Override occ/price with actual data
+                    nxt['Occ1'] = kap1[t + 1]
+                    nxt['Occ2'] = kap2[t + 1]
+                    nxt['price_t'] = lam[t + 1]
+                    nxt['price_previous'] = lam[t]
+                    nxt['current_time'] = t + 1
+                    traj_states.append(nxt)
+
+            # Backward: compute targets
+            V_future = 0.0
+            for t in range(T - 1, -1, -1):
+                target = traj_costs[t] + V_future
+                X_by_t[t].append(features(traj_states[t], t))
+                y_by_t[t].append(target)
+                V_future = target
+
+        # Fit per-timestep ridge regression
+        # features[0] is already a bias column (=1.0), so fit_intercept=False
+        for t in range(T):
+            X = np.array(X_by_t[t])
+            y = np.array(y_by_t[t])
+            reg = Ridge(alpha=1.0, fit_intercept=False)
+            reg.fit(X, y)
+            theta[t] = reg.coef_
+
+        if (iteration + 1) % 5 == 0:
+            print(f'  VFA iteration {iteration + 1}/{I} done')
+
+    return theta
+
+
+# ---------------------------------------------------------------------------
+# Load or train weights at import time
+# ---------------------------------------------------------------------------
+
+if os.path.exists(WEIGHTS_FILE):
+    with open(WEIGHTS_FILE, 'rb') as f:
+        theta = pickle.load(f)
+else:
+    print('Training VFA weights (first run)...')
+    theta = train_vfa()
+    with open(WEIGHTS_FILE, 'wb') as f:
+        pickle.dump(theta, f)
+    print('VFA weights saved.')
+
+
+# ---------------------------------------------------------------------------
+# Online policy
+# ---------------------------------------------------------------------------
+
+def select_action(state):
+    t = state['current_time']
+    p = _params
+    best_val = np.inf
+    best_act = {"HeatPowerRoom1": 0.0, "HeatPowerRoom2": 0.0, "VentilationON": 0}
+
+    theta_next = theta[t + 1] if t < 9 else np.zeros(15)
+
+    for p1 in HEAT_GRID:
+        for p2 in HEAT_GRID:
+            for v in VENT_GRID:
+                act = {'HeatPowerRoom1': p1, 'HeatPowerRoom2': p2, 'VentilationON': v}
+                eff = apply_overrules(state, act)
+                cost = state['price_t'] * (
+                    eff['HeatPowerRoom1'] + eff['HeatPowerRoom2']
+                    + p['ventilation_power'] * eff['VentilationON'])
+                nxt = simulate_one_step(state, eff, t)
+                future = (theta_next @ features(nxt, t + 1)) if t < 9 else 0.0
+                total = cost + future
+                if total < best_val:
+                    best_val = total
+                    best_act = eff
+
+    return {
+        "HeatPowerRoom1": float(best_act['HeatPowerRoom1']),
+        "HeatPowerRoom2": float(best_act['HeatPowerRoom2']),
+        "VentilationON":  int(best_act['VentilationON']),
+    }

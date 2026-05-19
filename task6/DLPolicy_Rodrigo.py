@@ -317,8 +317,7 @@ def build_and_solve_milp(state, prices, occ1s, occ2s, params):
     def startup_detect2(model, t):
         return model.s[t] <= model.v[t]
     def startup_detect3(model, t):
-        if t == 0: return Constraint.Skip
-        return model.s[t] <= 1 - model.v[t-1]
+        return model.s[t] <= 1 - (v_prev if t == 0 else model.v[t-1])
     model.startup_detect1 = Constraint(model.T, rule=startup_detect1)
     model.startup_detect2 = Constraint(model.T, rule=startup_detect2)
     model.startup_detect3 = Constraint(model.T, rule=startup_detect3)
