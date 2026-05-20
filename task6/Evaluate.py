@@ -34,7 +34,7 @@ from HindsightPolicy import HindsightPolicy
 from DLPolicy import DeterministicLookaheadPolicy
 import importlib
 from TwoSPPolicy import TwoStageSPPolicy
-from MSPolicy_test import MultiStageSPPolicy as MultiStageSPPolicy_test
+from MSPolicy_test import MultiStageSPPolicy
 from HybridPolicy import HybridPolicy
 from ADPPolicy import ADPPolicy  # available in task6/ADPPolicy.py (Rodrigo)
 
@@ -57,17 +57,17 @@ print("Running evaluations...")
 #dl_costs = run_simulation(DeterministicLookaheadPolicy(), num_experiments=100, verbose=True)
 #print(f"DL Policy     -> avg cost: {np.mean(dl_costs):.2f}")
 
-np.random.seed(20)
-sp2_costs = run_simulation(TwoStageSPPolicy(), num_experiments=100, verbose=True)
-print(f"2SP Policy     -> avg cost: {np.mean(sp2_costs):.2f}")
+#np.random.seed(20)
+#sp2_costs = run_simulation(TwoStageSPPolicy(), num_experiments=100, verbose=True)
+#print(f"2SP Policy     -> avg cost: {np.mean(sp2_costs):.2f}")
 
 #np.random.seed(20)
 #ms_costs_original = run_simulation(MultiStageSPPolicy(L=3, B=[20, 4], S_init=500), num_experiments=100)
 #print(f"MS Original    -> avg cost: {np.mean(ms_costs_original):.2f}")
 
-#np.random.seed(20)
-#ms_costs_test = run_simulation(MultiStageSPPolicy_test(L=3, B=[20, 4], S_init=500), num_experiments=100)
-#print(f"MS Test        -> avg cost: {np.mean(ms_costs_test):.2f}")
+np.random.seed(20)
+ms_costs_test = run_simulation(MultiStageSPPolicy(L=3, B=[20, 4], S_init=500), num_experiments=100, verbose=True)
+print(f"MS Test        -> avg cost: {np.mean(ms_costs_test):.2f}")
 
 #np.random.seed(20)
 #hybrid_costs = run_simulation(HybridPolicy(), num_experiments=100)
@@ -89,9 +89,9 @@ results = {
     # "2SP":        sp2_costs,
     # "MS-SP":      ms_costs,
     #"Hybrid":     hybrid_costs,
-    "ADP":        adp_costs,
+    #"ADP":        adp_costs,
     #"MS-Original": ms_costs_original,
-    #"MS-Test":     ms_costs_test,
+    "MS-Test":     ms_costs_test,
 }
 
 # =============================================================================
