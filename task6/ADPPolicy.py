@@ -14,8 +14,12 @@ import pandas as pd
 from pyomo.environ import (
     Binary,
     ConcreteModel,
+    Constraint,
     NonNegativeReals,
     Objective,
+    Reals,
+    RangeSet,
+    Set,
     SolverFactory,
     Var,
     minimize,
@@ -419,20 +423,25 @@ if __name__ == "__main__":
                                     prices[t], occ1_s[t], occ2_s[t])
 
     # OLS regression per timeslot (you can replace with Ridge if desired)
-    eta = np.zeros((T_TOTAL, N_FEATURES))
-    for t in range(T_TOTAL):
-        eta[t], _, _, _ = np.linalg.lstsq(State[t], V_star[:, t], rcond=None)
-        print(f"t={t}: eta = {eta[t].round(3)}")
+    #eta = np.zeros((T_TOTAL, N_FEATURES))
+    #for t in range(T_TOTAL):
+        #eta[t], _, _, _ = np.linalg.lstsq(State[t], V_star[:, t], rcond=None)
+       # print(f"t={t}: eta = {eta[t].round(3)}")
 
     # Alternative Ridge (commented out)
     # from sklearn.linear_model import Ridge
-    # ridge = Ridge(alpha=1.0, fit_intercept=False)
-    # for t in range(T_TOTAL):
-    #     ridge.fit(State[t], V_star[:, t])
-    #     eta[t] = ridge.coef_
-    #     print(f"t={t}: eta = {eta[t].round(3)}")
+    from sklearn.linear_model import Ridge
 
-    # Save weights
+    # --- Ridge regression per timeslot (initial fit) ---
+    eta = np.zeros((T_TOTAL, N_FEATURES))
+    ridge = Ridge(alpha=1.0, fit_intercept=False)
+
+    for t in range(T_TOTAL):
+        ridge.fit(State[t], V_star[:, t])
+        eta[t] = ridge.coef_
+        print(f"t={t}: eta = {eta[t].round(3)}")
+
+    # Save initial weights
     output_path = os.path.join(BASE_DIR, 'task4', 'eta.npy')
     np.save(output_path, eta)
     print(f"\nWeights saved to '{output_path}' — shape: {eta.shape}")
@@ -444,3 +453,44 @@ if __name__ == "__main__":
         ss_tot = np.sum((V_star[:, t] - V_star[:, t].mean()) ** 2)
         r2     = 1 - ss_res / ss_tot if ss_tot > 0 else 1.0
         print(f"t={t}: R² = {r2:.4f}")
+
+    # --- FVI iterations with Ridge refit ---
+    N_ITER = 30
+
+    for iteration in range(N_ITER):
+        V_fvi = np.zeros((N, T_TOTAL))
+
+        for t in range(T_TOTAL - 1, -1, -1):  # backwards like slide 44
+            for n, traj in enumerate(trajectories):
+                prices = np.array(traj['price'])
+                occ1_s = np.array(traj['Occ_r1'])
+                occ2_s = np.array(traj['Occ_r2'])
+                T_r1_s = np.array(traj['Temp_r1'])
+                T_r2_s = np.array(traj['Temp_r2'])
+                H_s    = np.array(traj['Hum'])
+                low_r1 = np.array(traj['low_override_r1'])
+                low_r2 = np.array(traj['low_override_r2'])
+
+                if t == T_TOTAL - 1:
+                    # Terminal: no future value
+                    V_fvi[n, t] = 0.0
+                else:
+                    P_vent = float(params['ventilation_power'])
+                    milp_cost = prices[t] * (traj['h_r1'][t] + traj['h_r2'][t] + P_vent * traj['v'][t])
+                    next_phi = State[t + 1, n]
+                    V_fvi[n, t] = -milp_cost + eta[t + 1] @ next_phi
+
+            # Ridge refit on new targets
+            ridge.fit(State[t], V_fvi[:, t])
+            eta[t] = ridge.coef_
+            print(f"FVI iter {iteration+1}, t={t}: eta = {eta[t].round(3)}")
+
+    np.save(output_path, eta)
+    print(f"FVI weights saved — shape: {eta.shape}")
+    ridge = Ridge(alpha=1.0, fit_intercept=False)
+    for t in range(T_TOTAL):
+        ridge.fit(State[t], V_star[:, t])
+        eta[t] = ridge.coef_
+        print(f"t={t}: eta = {eta[t].round(3)}")
+
+    
