@@ -25,7 +25,6 @@ from pyomo.environ import (
     minimize,
     value,
 )
-from sklearn.linear_model import Ridge
 
 # =============================================================================
 # 0. Paths – assume this script lives in the 'task4' folder
@@ -178,12 +177,12 @@ class ADPPolicy:
 # =============================================================================
 # 2. MILP solver for training (hindsight‑optimal trajectory)
 # =============================================================================
-def solve_milp_with_results(prices, occ1, occ2, params, T1_init=None, T2_init=None, H_init=None, t_start = 0):
+def solve_milp_with_results(prices, occ1, occ2, params):
     """
     Solves the full‑horizon MILP (Task 1) for one day.
     Returns a dict with all state and action trajectories.
     """
-    T = len(prices)
+    T = int(params['num_timeslots'])
     R = [1, 2]
     times = range(T)
 
@@ -202,9 +201,9 @@ def solve_milp_with_results(prices, occ1, occ2, params, T1_init=None, T2_init=No
     H_high    = float(params['humidity_threshold'])
     U_vent    = int(params['vent_min_up_time'])
     T_out     = list(params['outdoor_temperature'])
-    T1_init   = float(params['T1']) if T1_init is None else T1_init
-    T2_init   = float(params['T2']) if T2_init is None else T2_init
-    H_init    = float(params['H']) if H_init is None else H_init
+    T1_init   = float(params['T1'])
+    T2_init   = float(params['T2'])
+    H_init    = float(params['H'])
     M_temp    = 100
     M_hum     = 200
 
@@ -241,7 +240,7 @@ def solve_milp_with_results(prices, occ1, occ2, params, T1_init=None, T2_init=No
         return model.Temp[r, t] == (
             model.Temp[r, t-1]
             + zeta_exch * (model.Temp[r_other, t-1] - model.Temp[r, t-1])
-            - zeta_loss * (model.Temp[r, t-1] - T_out[t_start + t-1])
+            - zeta_loss * (model.Temp[r, t-1] - T_out[t-1])
             + zeta_conv * model.p[r, t-1]
             - zeta_cool * model.v[t-1]
             + zeta_occ  * occ[r, t-1]
@@ -354,7 +353,6 @@ def solve_milp_with_results(prices, occ1, occ2, params, T1_init=None, T2_init=No
         'price':           list(prices),
         'Occ_r1':          list(occ1),
         'Occ_r2':          list(occ2),
-        'total_cost': sum(prices[t] * (value(model.p[1,t]) + value(model.p[2,t]) + P_vent * value(model.v[t])) for t in range(T)),
     }
 
 
@@ -370,76 +368,72 @@ def state(T_r1, T_r2, H, price, occ1, occ2):
 
 N_FEATURES = 7
 
+
+# =============================================================================
+# 4. Training procedure (executed when script is run directly)
+# =============================================================================
 if __name__ == "__main__":
     params  = sc.get_fixed_data()
     T_TOTAL = int(params['num_timeslots'])
-    K = 5  # número de futuros por estado
 
-    # Carregar dados
+    # Load training data
     price_data = pd.read_csv(os.path.join(OUT_OF_SAMPLE_DIR, 'OutOfSamplePriceData.csv'))
     occ_room1  = pd.read_csv(os.path.join(OUT_OF_SAMPLE_DIR, 'OutOfSampleOccupancyRoom1.csv'))
     occ_room2  = pd.read_csv(os.path.join(OUT_OF_SAMPLE_DIR, 'OutOfSampleOccupancyRoom2.csv'))
 
-    N_DAYS = len(price_data)
-    print(f"Dados carregados — {N_DAYS} dias, {T_TOTAL} timeslots, K={K}")
+    print(f"Data loaded — Prices: {price_data.shape}, Occ1: {occ_room1.shape}, Occ2: {occ_room2.shape}")
 
-    # Passo 1: resolver N MILPs para obter estados realistas x_{n,t}
+    # Collect hindsight‑optimal trajectories
+    N_DAYS = len(price_data)
     trajectories = []
     for day in range(N_DAYS):
         prices = price_data.iloc[day, :].values
         occ1   = occ_room1.iloc[day, :].values
         occ2   = occ_room2.iloc[day, :].values
-        traj   = solve_milp_with_results(prices, occ1, occ2, params)
+        traj = solve_milp_with_results(prices, occ1, occ2, params)
         trajectories.append(traj)
-    print(f"Estados recolhidos: {N_DAYS} trajetórias")
+    print(f"\nTrajectories collected: {len(trajectories)} days x {T_TOTAL} timeslots")
 
-    # Passo 2: OiH — calcular V* para cada estado x_{n,t}
-    V_star = np.zeros((N_DAYS, T_TOTAL))
-    State  = np.zeros((T_TOTAL, N_DAYS, N_FEATURES))
+    # Build V* targets and feature matrices
+    N      = len(trajectories)
+    V_star = np.zeros((N, T_TOTAL))
+    State  = np.zeros((T_TOTAL, N, N_FEATURES))
 
-    for t in range(T_TOTAL):
-        print(f"Timeslot t={t}")
-        for n in range(N_DAYS):
+    for n, traj in enumerate(trajectories):
+        prices = np.array(traj['price'])
+        h_r1   = np.array(traj['h_r1'])
+        h_r2   = np.array(traj['h_r2'])
+        v      = np.array(traj['v'])
+        T_r1_s = np.array(traj['Temp_r1'])
+        T_r2_s = np.array(traj['Temp_r2'])
+        H_s    = np.array(traj['Hum'])
+        occ1_s = np.array(traj['Occ_r1'])
+        occ2_s = np.array(traj['Occ_r2'])
 
-            # Estado x_{n,t}
-            T1_nt    = trajectories[n]['Temp_r1'][t]
-            T2_nt    = trajectories[n]['Temp_r2'][t]
-            H_nt     = trajectories[n]['Hum'][t]
-            price_nt = price_data.iloc[n, t]
-            occ1_nt  = occ_room1.iloc[n, t]
-            occ2_nt  = occ_room2.iloc[n, t]
+        P_vent = float(params['ventilation_power'])
+        cost_per_hour = prices * (h_r1 + h_r2 + P_vent * v)
 
-            # Guardar vetor de features para a regressão
-            State[t, n] = state(T1_nt, T2_nt, H_nt, price_nt, occ1_nt, occ2_nt)
+        for t in range(T_TOTAL):
+            V_star[n, t] = -np.sum(cost_per_hour[t+1:])
+            if t < T_TOTAL - 1:
+                State[t, n] = state(T_r1_s[t+1], T_r2_s[t+1], H_s[t+1],
+                                    prices[t], occ1_s[t], occ2_s[t])
+            else:
+                State[t, n] = state(T_r1_s[t], T_r2_s[t], H_s[t],
+                                    prices[t], occ1_s[t], occ2_s[t])
 
-            # Sortear K futuros e resolver 1 MILP por futuro
-            k_costs = []
-            for k in range(K):
-                k_day = np.random.randint(0, N_DAYS)
+    # OLS regression per timeslot (you can replace with Ridge if desired)
+    #eta = np.zeros((T_TOTAL, N_FEATURES))
+    #for t in range(T_TOTAL):
+        #eta[t], _, _, _ = np.linalg.lstsq(State[t], V_star[:, t], rcond=None)
+       # print(f"t={t}: eta = {eta[t].round(3)}")
 
-                # Futuro do dia k a partir do timeslot t
-                future_prices = price_data.iloc[k_day, t:].values
-                future_occ1   = occ_room1.iloc[k_day, t:].values
-                future_occ2   = occ_room2.iloc[k_day, t:].values
+    # Alternative Ridge (commented out)
+    # from sklearn.linear_model import Ridge
+    from sklearn.linear_model import Ridge
 
-                # Resolver MILP começando de (T1,T2,H)_{n,t} com este futuro
-                result = solve_milp_with_results(
-                    prices=future_prices,
-                    occ1=future_occ1,
-                    occ2=future_occ2,
-                    params=params,
-                    T1_init=T1_nt,
-                    T2_init=T2_nt,
-                    H_init=H_nt,
-                    t_start=t,
-                )
-                k_costs.append(result['total_cost'])
-
-            # V* = média negativa dos K custos
-            V_star[n, t] = -np.mean(k_costs)
-
-    # Passo 3: Ridge regression por timeslot (igual ao teu código anterior)
-    eta   = np.zeros((T_TOTAL, N_FEATURES))
+    # --- Ridge regression per timeslot (initial fit) ---
+    eta = np.zeros((T_TOTAL, N_FEATURES))
     ridge = Ridge(alpha=1.0, fit_intercept=False)
 
     for t in range(T_TOTAL):
@@ -447,15 +441,17 @@ if __name__ == "__main__":
         eta[t] = ridge.coef_
         print(f"t={t}: eta = {eta[t].round(3)}")
 
-    # Guardar pesos
+    # Save initial weights
     output_path = os.path.join(BASE_DIR, 'task4', 'eta.npy')
     np.save(output_path, eta)
-    print(f"Pesos guardados em '{output_path}' — shape: {eta.shape}")
+    print(f"\nWeights saved to '{output_path}' — shape: {eta.shape}")
 
-    # Diagnóstico R²
+        # In‑sample R² diagnostic
     for t in range(T_TOTAL):
         pred   = State[t] @ eta[t]
         ss_res = np.sum((V_star[:, t] - pred) ** 2)
         ss_tot = np.sum((V_star[:, t] - V_star[:, t].mean()) ** 2)
         r2     = 1 - ss_res / ss_tot if ss_tot > 0 else 1.0
         print(f"t={t}: R² = {r2:.4f}")
+
+    
