@@ -162,8 +162,8 @@ def solve_mssp(state, nodes, t_now, params):
     #T_high    = params['temp_max_comfort_threshold']
 
     # REPLACEd WITH:
-    T_low  = params['temp_min_comfort_threshold']
-    T_high = params['temp_max_comfort_threshold']
+    T_low  = params['temp_min_comfort_threshold'] - 0.001
+    T_high = params['temp_max_comfort_threshold'] + 0.001
 
     H_high    = params['humidity_threshold']
     U_vent    = params['vent_min_up_time']
@@ -330,7 +330,7 @@ def solve_mssp(state, nodes, t_now, params):
     if T1_now < params['temp_min_comfort_threshold']:
         low_or1 = 1
     if low_or1 == 1:
-        if T1_now > params['temp_OK_threshold']:
+        if T1_now >= params['temp_OK_threshold']:
             low_or1 = 0
         else:
             m.p1[0].fix(P_max)
@@ -341,7 +341,7 @@ def solve_mssp(state, nodes, t_now, params):
     if T2_now < params['temp_min_comfort_threshold']:
         low_or2 = 1
     if low_or2 == 1:
-        if T2_now > params['temp_OK_threshold']:
+        if T2_now >= params['temp_OK_threshold']:
             low_or2 = 0
         else:
             m.p2[0].fix(P_max)
@@ -456,7 +456,7 @@ def solve_1stage(state, params):
     if T1_now < params['temp_min_comfort_threshold']:
         low_or1 = 1
     if low_or1 == 1:
-        if T1_now > params['temp_OK_threshold']:
+        if T1_now >= params['temp_OK_threshold']:
             low_or1 = 0
         else:
             m.p1.fix(P_max)
@@ -467,7 +467,7 @@ def solve_1stage(state, params):
     if T2_now < params['temp_min_comfort_threshold']:
         low_or2 = 1
     if low_or2 == 1:
-        if T2_now > params['temp_OK_threshold']:
+        if T2_now >= params['temp_OK_threshold']:
             low_or2 = 0
         else:
             m.p2.fix(P_max)

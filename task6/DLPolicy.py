@@ -11,8 +11,9 @@ from OccupancyProcessRestaurant import next_occupancy_levels
 
 
 def build_deterministic_path(state, t_now, L, S_init=500):
-    # B=1 special case of build_scenario_tree:
-    # sample S_init points, take the mean (single centroid)
+    # Replaces build_scenario_tree from MSPolicy_test with B=1 (no branching).
+    # Instead of KMeans clustering into B centroids, S_init samples are drawn
+    # and collapsed to a single mean — one node per stage.
     root = {
         'id':         0,
         'stage':      0,
@@ -68,8 +69,11 @@ def _descendants_within(node_by_id, start_id, max_depth):
 
 
 def solve_milp(state, nodes, t_now, params):
-    # Identical to solve_mssp in MSPolicy.
-    # L nodes instead of 1+B+B^2, so solves in milliseconds.
+    # Adapted from solve_mssp in MSPolicy_test: MILP structure is identical.
+    # Two changes follow from having a single deterministic path (all prob=1.0):
+    #   1. Objective drops the prob weight — nd['price'] replaces nd['prob']*nd['price'].
+    #   2. Only L nodes total (vs 1+B+B^2), so TimeLimit is reduced to 10s and
+    #      MIPGap tightened to 0.001 since the problem is much smaller.
     P_max     = params['heating_max_power']
     P_vent    = params['ventilation_power']
     zeta_exch = params['heat_exchange_coeff']
@@ -120,6 +124,8 @@ def solve_milp(state, nodes, t_now, params):
     m.u1     = Var(non_root_ids, domain=Binary)
     m.u2     = Var(non_root_ids, domain=Binary)
 
+    # In solve_mssp the term was nd['prob']*nd['price']*(...). Here prob=1.0 for
+    # every node on the single path, so the weight is dropped.
     def obj_rule(m):
         c = price_now * (m.p1[0] + m.p2[0] + P_vent * m.v[0])
         for nid in non_root_ids:
@@ -357,6 +363,9 @@ def solve_1stage(state, params):
         return 0.0, 0.0, 0
 
 
+# Adapted from MultiStageSPPolicy in MSPolicy_test.
+# The B (branching) parameter is removed; the scenario tree is replaced by a
+# single mean path, so the class only needs L and S_init.
 class DeterministicLookaheadPolicy:
 
     def __init__(self, L=6, S_init=500):
@@ -389,6 +398,8 @@ class DeterministicLookaheadPolicy:
         }
 
 
+# MSPolicy_test eagerly initialises _policy at import time; here it is lazy
+# to match task6's module interface convention.
 _policy = None
 
 def select_action(state):

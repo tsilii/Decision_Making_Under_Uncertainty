@@ -45,17 +45,17 @@ from ADPPolicy import ADPPolicy  # available in task6/ADPPolicy.py (Rodrigo)
 
 print("Running evaluations...")
 
-# np.random.seed(20)
-# dummy_costs = run_simulation(DummyPolicy(), num_experiments=100)
-# print(f"Dummy Policy  -> avg cost: {np.mean(dummy_costs):.2f}")
+np.random.seed(20)
+dummy_costs = run_simulation(DummyPolicy(), num_experiments=100)
+print(f"Dummy Policy  -> avg cost: {np.mean(dummy_costs):.2f}")
 
 #np.random.seed(20)
 #hindsight_costs = run_simulation(HindsightPolicy(), num_experiments=100)
 #print(f"Hindsight     -> avg cost: {np.mean(hindsight_costs):.2f}")
 
-#np.random.seed(20)
-#dl_costs = run_simulation(DeterministicLookaheadPolicy(), num_experiments=100, verbose=True)
-#print(f"DL Policy     -> avg cost: {np.mean(dl_costs):.2f}")
+np.random.seed(20)
+dl_costs = run_simulation(DeterministicLookaheadPolicy(), num_experiments=100, verbose=True)
+print(f"DL Policy     -> avg cost: {np.mean(dl_costs):.2f}")
 
 #np.random.seed(20)
 #sp2_costs = run_simulation(TwoStageSPPolicy(), num_experiments=100, verbose=True)
@@ -65,17 +65,17 @@ print("Running evaluations...")
 #ms_costs_original = run_simulation(MultiStageSPPolicy(L=3, B=[20, 4], S_init=500), num_experiments=100)
 #print(f"MS Original    -> avg cost: {np.mean(ms_costs_original):.2f}")
 
-#np.random.seed(20)
-#ms_costs_test = run_simulation(MultiStageSPPolicy(L=3, B=[20, 4], S_init=500), num_experiments=100, verbose=True)
-#print(f"MS Test        -> avg cost: {np.mean(ms_costs_test):.2f}")
+np.random.seed(20)
+ms_costs_test = run_simulation(MultiStageSPPolicy(L=3, B=[20, 4], S_init=500), num_experiments=100, verbose=True)
+print(f"MS Test        -> avg cost: {np.mean(ms_costs_test):.2f}")
 
 #np.random.seed(20)
 #hybrid_costs = run_simulation(HybridPolicy(), num_experiments=100)
 #print(f"Hybrid Policy  -> avg cost: {np.mean(hybrid_costs):.2f}")
 
-np.random.seed(20)
-adp_costs = run_simulation(ADPPolicy(), num_experiments=100, verbose=True)
-print(f"ADP Policy     -> avg cost: {np.mean(adp_costs):.2f}")
+#np.random.seed(20)
+#adp_costs = run_simulation(ADPPolicy(), num_experiments=100, verbose=True)
+#print(f"ADP Policy     -> avg cost: {np.mean(adp_costs):.2f}")
 
 
 # =============================================================================
