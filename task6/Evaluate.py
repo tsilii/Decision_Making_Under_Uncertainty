@@ -34,7 +34,6 @@ from HindsightPolicy import HindsightPolicy
 from DLPolicy import DeterministicLookaheadPolicy
 import importlib
 from TwoSPPolicy import TwoStageSPPolicy
-from MSPolicy import MultiStageSPPolicy
 from MSPolicy_test import MultiStageSPPolicy as MultiStageSPPolicy_test
 from HybridPolicy import HybridPolicy
 from ADPPolicy import ADPPolicy  # available in task6/ADPPolicy.py (Rodrigo)
