@@ -271,9 +271,9 @@ def solve_2stage_milp(state, centroids, probabilities, params):
     if low_override_r2 == 1:
         m.p2_now.fix(P_max)
     # High-overrule takes priority: force heater to zero
-    if T1_now >= T_high:
+    if T1_now > T_high:
         m.p1_now.fix(0.0)
-    if T2_now >= T_high:
+    if T2_now > T_high:
         m.p2_now.fix(0.0)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -437,7 +437,7 @@ def solve_2stage_milp(state, centroids, probabilities, params):
     # ─────────────────────────────────────────────────────────────────────────
     # HUMIDITY OVERRULE AT τ — fix() since H_now is known
     # ─────────────────────────────────────────────────────────────────────────
-    if H_now >= H_high:
+    if H_now > H_high:
         m.v_now.fix(1)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -523,11 +523,11 @@ def solve_1stage(state, params):
         m.p1.fix(P_max)
     if low_override_r2 == 1:
         m.p2.fix(P_max)
-    if T1_now >= T_high:
+    if T1_now > T_high:
         m.p1.fix(0.0)
-    if T2_now >= T_high:
+    if T2_now > T_high:
         m.p2.fix(0.0)
-    if H_now >= H_high:
+    if H_now > H_high:
         m.v.fix(1)
 
     # Ventilation inertia

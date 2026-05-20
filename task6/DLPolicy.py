@@ -12,7 +12,7 @@ from OccupancyProcessRestaurant import next_occupancy_levels
 
 def build_deterministic_path(state, t_now, L, S_init=500):
     # B=1 special case of build_scenario_tree:
-    # sample S_init points, take the mean (= single centroid, no KMeans needed)
+    # sample S_init points, take the mean (single centroid)
     root = {
         'id':         0,
         'stage':      0,
