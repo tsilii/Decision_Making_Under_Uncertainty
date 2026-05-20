@@ -422,17 +422,15 @@ if __name__ == "__main__":
                 State[t, n] = state(T_r1_s[t], T_r2_s[t], H_s[t],
                                     prices[t], occ1_s[t], occ2_s[t])
 
-    # OLS regression per timeslot (you can replace with Ridge if desired)
+    # OLS regression per timeslot, worst results than ridge (commented out)
     #eta = np.zeros((T_TOTAL, N_FEATURES))
     #for t in range(T_TOTAL):
         #eta[t], _, _, _ = np.linalg.lstsq(State[t], V_star[:, t], rcond=None)
        # print(f"t={t}: eta = {eta[t].round(3)}")
 
-    # Alternative Ridge (commented out)
-    # from sklearn.linear_model import Ridge
     from sklearn.linear_model import Ridge
 
-    # --- Ridge regression per timeslot (initial fit) ---
+    # Ridge regression per timeslot
     eta = np.zeros((T_TOTAL, N_FEATURES))
     ridge = Ridge(alpha=1.0, fit_intercept=False)
 
@@ -446,7 +444,7 @@ if __name__ == "__main__":
     np.save(output_path, eta)
     print(f"\nWeights saved to '{output_path}' — shape: {eta.shape}")
 
-        # In‑sample R² diagnostic
+    # In‑sample R² diagnostic
     for t in range(T_TOTAL):
         pred   = State[t] @ eta[t]
         ss_res = np.sum((V_star[:, t] - pred) ** 2)
