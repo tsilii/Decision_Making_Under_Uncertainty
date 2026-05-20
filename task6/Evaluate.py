@@ -36,6 +36,7 @@ import importlib
 sys.path.insert(0, os.path.join(BASE_DIR, "Task6"))
 TwoStageSPPolicy = importlib.import_module("2SPPolicy").TwoStageSPPolicy
 from MSPolicy import MultiStageSPPolicy
+from MSPolicy_test import MultiStageSPPolicy as MultiStageSPPolicy_test
 from HybridPolicy import HybridPolicy
 from ADPPolicy import ADPPolicy  # available in task6/ADPPolicy.py (Rodrigo)
 
@@ -62,13 +63,17 @@ print(f"Hindsight     -> avg cost: {np.mean(hindsight_costs):.2f}")
 # sp2_costs = run_simulation(TwoStageSPPolicy(), num_experiments=100)
 # print(f"2SP Policy     -> avg cost: {np.mean(sp2_costs):.2f}")
 
-# np.random.seed(20)
-# ms_costs = run_simulation(MultiStageSPPolicy(L=3, B=[20, 4], S_init=500), num_experiments=100)
-# print(f"MS Policy      -> avg cost: {np.mean(ms_costs):.2f}")
+np.random.seed(20)
+ms_costs_original = run_simulation(MultiStageSPPolicy(L=3, B=[20, 4], S_init=500), num_experiments=100)
+print(f"MS Original    -> avg cost: {np.mean(ms_costs_original):.2f}")
 
 np.random.seed(20)
-hybrid_costs = run_simulation(HybridPolicy(), num_experiments=100)
-print(f"Hybrid Policy  -> avg cost: {np.mean(hybrid_costs):.2f}")
+ms_costs_test = run_simulation(MultiStageSPPolicy_test(L=3, B=[20, 4], S_init=500), num_experiments=100)
+print(f"MS Test        -> avg cost: {np.mean(ms_costs_test):.2f}")
+
+#np.random.seed(20)
+#hybrid_costs = run_simulation(HybridPolicy(), num_experiments=100)
+#print(f"Hybrid Policy  -> avg cost: {np.mean(hybrid_costs):.2f}")
 
 #np.random.seed(20)
 #adp_costs = run_simulation(ADPPolicy(), num_experiments=100)
@@ -87,6 +92,8 @@ results = {
     # "MS-SP":      ms_costs,
     "Hybrid":     hybrid_costs,
      #"ADP":        adp_costs,
+    "MS-Original": ms_costs_original,
+    "MS-Test":     ms_costs_test,
 }
 
 # =============================================================================
